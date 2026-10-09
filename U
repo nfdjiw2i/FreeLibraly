@@ -1,1 +1,2995 @@
-local H=game:GetService("HttpService");local R=request or http_request or (syn and syn.request);if not R then error("USURE HTTP unavailable") end;local S=R({Url="https://bold-darkness-4fdd.lvlyvcbcla.workers.dev/activate",Method="POST",Headers={["Content-Type"]="application/json"},Body=H:JSONEncode({token="d9c4dd2ad473e64fe4de0d230f59a7e4294b15df36aecf84a8f2019d626bbd5d"})});if not S or S.StatusCode~=200 then error("USURE activation failed: "..tostring(S and S.StatusCode)) end;local D=H:JSONDecode(S.Body);if not D or D.success~=true or type(D.code)~="string" then error("USURE activation failed: "..tostring(D and D.error)) end;local F=loadstring or load;local G,E=F(D.code);if not G then error("USURE compile failed: "..tostring(E)) end;G()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local PathfindingService = game:GetService("PathfindingService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+local TweenService = game:GetService("TweenService")
+
+local LP = Players.LocalPlayer
+local Mouse = LP:GetMouse()
+
+_G.__ForsakenHubGeneration = (_G.__ForsakenHubGeneration or 0) + 1
+local hubGeneration = _G.__ForsakenHubGeneration
+
+if _G.__ForsakenHubGui then pcall(function() _G.__ForsakenHubGui:Destroy() end) end
+
+local FIREBASE_URL = "https://forsaken-6120b-default-rtdb.firebaseio.com/"
+
+local FONT = Enum.Font.Code
+local FONT_B = Enum.Font.GothamBold
+
+local states = {
+    espEnabled = false,
+    hpEspEnabled = false,
+    killerDoors = false,
+    tpSpeedEnabled = false,
+    shiftTpEnabled = false,
+    enableJump = false,
+    enableWalkSpeed = false,
+    noBarriers = false,
+    safeSpectatorTp = false,
+    ctrlClickTp = false,
+    noclip = false,
+    genEsp = false,
+    itemEsp = false,
+    autoSolveGen = false,
+    flyEnabled = false,
+    botEnabled = false,
+    killerBotEnabled = false,
+    botSprint = false,
+    fullBright = false,
+    killerUseQ = false,
+    godMode = false,
+    antiFlower = false,
+    backTeleport = false,
+    radarEnabled = false,
+}
+
+local tpSpeedValue = 16
+local shiftTpSpeedValue = 25
+local walkSpeedValue = 16
+local jumpPowerValue = 50
+local flySpeedValue = 50
+local sprintSpeedValue = 24
+
+local currentCustomConfig = {}
+local lobbySafeDelay = 0.5
+local lobbyHistory = {}
+local lobbyHistoryAcc = 0
+local lobbyHistoryMax = 1.0
+local safeTeleport
+local radarEnabled = false
+local radarGui = nil
+local radarDots = {}
+local configSlots = {}
+local configStatus = nil
+
+local function setShiftHeld(held)
+    local vim = game:GetService("VirtualInputManager")
+    if not vim then return end
+    pcall(function()
+        vim:SendKeyEvent(held, Enum.KeyCode.LeftShift, false, game)
+    end)
+end
+
+local function clickAttack()
+    pcall(function()
+        if mouse1click then
+            mouse1click()
+            return
+        end
+    end)
+    local vim = game:GetService("VirtualInputManager")
+    if vim then
+        pcall(function()
+            vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        end)
+        task.delay(0.06, function()
+            pcall(function()
+                vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end)
+        end)
+    end
+end
+
+local function getSprintSpeed()
+    return math.max(20, sprintSpeedValue)
+end
+
+local function safeLookCF(fromPos, toPos)
+    local delta = toPos - fromPos
+    if delta.Magnitude < 0.08 then
+        return CFrame.new(fromPos)
+    end
+    local ok, cf = pcall(CFrame.lookAt, fromPos, toPos)
+    if ok and cf then return cf end
+    return CFrame.new(fromPos)
+end
+
+local function pressKey(keyCode, duration)
+    local vim = game:GetService("VirtualInputManager")
+    if not vim then return end
+    pcall(function()
+        vim:SendKeyEvent(true, keyCode, false, game)
+    end)
+    task.delay(duration or 0.08, function()
+        pcall(function()
+            vim:SendKeyEvent(false, keyCode, false, game)
+        end)
+    end)
+end
+
+local origBrightness = Lighting.Brightness
+local origClockTime = Lighting.ClockTime
+local origFogEnd = Lighting.FogEnd
+local origGlobalShadows = Lighting.GlobalShadows
+local origOutdoorAmbient = Lighting.OutdoorAmbient
+local origAmbient = Lighting.Ambient
+local origColorShiftTop = Lighting.ColorShift_Top
+local origColorShiftBottom = Lighting.ColorShift_Bottom
+local origExposure = Lighting.ExposureCompensation
+local fullBrightEffects = {}
+local appliedFullBright = nil
+
+local function setFullBright(enabled)
+    if enabled then
+        Lighting.Brightness = 3
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 1000000
+        Lighting.GlobalShadows = false
+        Lighting.Ambient = Color3.fromRGB(210, 210, 210)
+        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+        Lighting.ColorShift_Top = Color3.fromRGB(255, 255, 255)
+        Lighting.ColorShift_Bottom = Color3.fromRGB(255, 255, 255)
+        Lighting.ExposureCompensation = 0.35
+        for _, obj in ipairs(Lighting:GetChildren()) do
+            if obj:IsA("Atmosphere") then
+                if fullBrightEffects[obj] == nil then
+                    fullBrightEffects[obj] = {
+                        Density = obj.Density, Haze = obj.Haze, Glare = obj.Glare,
+                        Offset = obj.Offset, Color = obj.Color, Decay = obj.Decay,
+                    }
+                end
+                obj.Density = 0
+                obj.Haze = 0
+                obj.Glare = 0
+            elseif obj:IsA("BloomEffect") or obj:IsA("BlurEffect")
+                or obj:IsA("ColorCorrectionEffect") or obj:IsA("DepthOfFieldEffect")
+                or obj:IsA("SunRaysEffect") then
+                if fullBrightEffects[obj] == nil then
+                    fullBrightEffects[obj] = {Enabled = obj.Enabled}
+                end
+                obj.Enabled = false
+            end
+        end
+    else
+        Lighting.Brightness = origBrightness
+        Lighting.ClockTime = origClockTime
+        Lighting.FogEnd = origFogEnd
+        Lighting.GlobalShadows = origGlobalShadows
+        Lighting.Ambient = origAmbient
+        Lighting.OutdoorAmbient = origOutdoorAmbient
+        Lighting.ColorShift_Top = origColorShiftTop
+        Lighting.ColorShift_Bottom = origColorShiftBottom
+        Lighting.ExposureCompensation = origExposure
+        for obj, saved in pairs(fullBrightEffects) do
+            if obj and obj.Parent then
+                if saved.Density ~= nil then
+                    obj.Density = saved.Density
+                    obj.Haze = saved.Haze
+                    obj.Glare = saved.Glare
+                    if saved.Offset then obj.Offset = saved.Offset end
+                    if saved.Color then obj.Color = saved.Color end
+                    if saved.Decay then obj.Decay = saved.Decay end
+                elseif saved.Enabled ~= nil then
+                    obj.Enabled = saved.Enabled
+                end
+            end
+        end
+        fullBrightEffects = {}
+    end
+end
+
+local moneyStats = {
+    current = 0,
+    previous = 0,
+    startOfDay = 0,
+    earnedToday = 0,
+    spentToday = 0,
+    earnedWeek = 0,
+    spentWeek = 0,
+    earnedTotal = 0,
+    spentTotal = 0,
+    history = {},
+}
+
+local highlights = {}
+local hpBillboards = {}
+local genHighlights = {}
+local itemHighlights = {}
+local barrierOriginalState = {}
+local isSolvingGen = false
+
+local function httpRequest(url, method, data)
+    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+    if not req then return nil end
+    local ok, res = pcall(function()
+        return req({
+            Url = url,
+            Method = method or "GET",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = data and HttpService:JSONEncode(data) or nil,
+        })
+    end)
+    if not ok or not res then return nil end
+    if res.Body and res.Body ~= "" and res.Body ~= "null" then
+        local decOk, decoded = pcall(function() return HttpService:JSONDecode(res.Body) end)
+        if decOk then return decoded end
+    end
+    return res
+end
+
+local function getPlayerMoney()
+    local ls = LP:FindFirstChild("leaderstats")
+    if ls then
+        local m = ls:FindFirstChild("Money") or ls:FindFirstChild("Coins") or ls:FindFirstChild("Cash")
+        if m then return m.Value end
+    end
+    return 0
+end
+
+local function initFirebaseStats()
+    local userKey = tostring(LP.UserId)
+    local endpoint = FIREBASE_URL .. "users/" .. userKey .. ".json"
+    local initialMoney = getPlayerMoney()
+
+    moneyStats.current = initialMoney
+    moneyStats.previous = initialMoney
+    moneyStats.startOfDay = initialMoney
+
+    local remote = httpRequest(endpoint, "GET")
+    if type(remote) == "table" then
+        if type(remote.history) == "table" and #remote.history > 0 then
+            moneyStats.history = remote.history
+        end
+        if remote.startOfDay then moneyStats.startOfDay = remote.startOfDay end
+        if remote.todayEarned then moneyStats.earnedToday = remote.todayEarned end
+        if remote.todaySpent then moneyStats.spentToday = remote.todaySpent end
+        if remote.weekEarned then moneyStats.earnedWeek = remote.weekEarned end
+        if remote.weekSpent then moneyStats.spentWeek = remote.weekSpent end
+        if remote.totalEarned then moneyStats.earnedTotal = remote.totalEarned end
+        if remote.totalSpent then moneyStats.spentTotal = remote.totalSpent end
+        if remote.currentMoney then
+            moneyStats.current = remote.currentMoney
+            moneyStats.previous = remote.previousMoney or remote.currentMoney
+        end
+    end
+
+    if #moneyStats.history == 0 then
+        table.insert(moneyStats.history, {
+            time = os.time(),
+            date = os.date("%Y-%m-%d %H:%M:%S"),
+            prevAmount = initialMoney,
+            amount = initialMoney,
+            diff = 0,
+        })
+    end
+
+    task.spawn(function()
+        httpRequest(endpoint, "PATCH", {
+            username = LP.Name,
+            lastOnline = os.time(),
+            currentMoney = initialMoney,
+            startOfDay = moneyStats.startOfDay,
+            todayEarned = moneyStats.earnedToday,
+            weekEarned = moneyStats.earnedWeek,
+            totalEarned = moneyStats.earnedTotal,
+            history = moneyStats.history,
+        })
+    end)
+
+    task.spawn(function()
+        local lastVal = getPlayerMoney()
+        local lastPatch = 0
+        while task.wait(12) do
+            if not scriptAlive then break end
+            local curVal = getPlayerMoney()
+            if curVal ~= lastVal then
+                local diff = curVal - lastVal
+                moneyStats.previous = lastVal
+                moneyStats.current = curVal
+                if diff > 0 then
+                    moneyStats.earnedToday += diff
+                    moneyStats.earnedWeek += diff
+                    moneyStats.earnedTotal += diff
+                elseif diff < 0 then
+                    local spent = -diff
+                    moneyStats.spentToday += spent
+                    moneyStats.spentWeek += spent
+                    moneyStats.spentTotal += spent
+                end
+
+                table.insert(moneyStats.history, {
+                    time = os.time(),
+                    date = os.date("%Y-%m-%d %H:%M:%S"),
+                    prevAmount = lastVal,
+                    amount = curVal,
+                    diff = diff,
+                    kind = diff >= 0 and "earn" or "spend",
+                })
+                while #moneyStats.history > 40 do
+                    table.remove(moneyStats.history, 1)
+                end
+
+                if os.clock() - lastPatch > 25 then
+                    lastPatch = os.clock()
+                    task.spawn(function()
+                        httpRequest(endpoint, "PATCH", {
+                            lastOnline = os.time(),
+                            username = LP.Name,
+                            currentMoney = curVal,
+                            previousMoney = lastVal,
+                            startOfDay = moneyStats.startOfDay,
+                            todayEarned = moneyStats.earnedToday,
+                            todaySpent = moneyStats.spentToday,
+                            weekEarned = moneyStats.earnedWeek,
+                            weekSpent = moneyStats.spentWeek,
+                            totalEarned = moneyStats.earnedTotal,
+                            totalSpent = moneyStats.spentTotal,
+                            historyLen = #moneyStats.history,
+                        })
+                    end)
+                end
+                lastVal = curVal
+            end
+        end
+    end)
+end
+
+local firebaseReady = false
+local function ensureFirebase()
+    if firebaseReady then return end
+    firebaseReady = true
+    task.spawn(function()
+        pcall(initFirebaseStats)
+    end)
+end
+
+local genCache, genCacheAt = {}, 0
+local GEN_CACHE_TTL = 2.5
+local completedGenBlacklist = {}
+local completedGenPosKeys = {}
+local GEN_BLACKLIST_SEC = 90
+local lastWorkedGen = nil
+local lastWorkedAt = 0
+
+local function genPosKey(gen)
+    local pos
+    if gen:IsA("Model") then
+        local ok, piv = pcall(function() return gen:GetPivot().Position end)
+        if ok then pos = piv end
+    elseif gen:IsA("BasePart") then
+        pos = gen.Position
+    end
+    if not pos then return nil end
+    return string.format("%d_%d_%d", math.floor(pos.X / 4), math.floor(pos.Y / 4), math.floor(pos.Z / 4))
+end
+
+local function hasEnabledPrompt(gen)
+    if not gen then return false end
+    local found = false
+    local anyPrompt = false
+    pcall(function()
+        for _, d in ipairs(gen:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                anyPrompt = true
+                if d.Enabled then
+                    found = true
+                    break
+                end
+            end
+        end
+    end)
+    if anyPrompt and not found then
+        return false
+    end
+    return true
+end
+
+local function getGeneratorProgress(gen)
+    if not gen or not gen.Parent then return 100 end
+    local best = nil
+
+    local function consider(v)
+        if typeof(v) ~= "number" then return end
+        local p = v
+        if p <= 1.05 and p >= 0 then
+            p = p * 100
+        end
+        if p < 0 then return end
+        if p > 100 then p = 100 end
+        if best == nil or p > best then best = p end
+    end
+
+    for _, a in ipairs({"Progress", "RepairProgress", "Percent", "Completion", "Progression", "Charge", "Power", "Amount"}) do
+        consider(gen:GetAttribute(a))
+    end
+
+    pcall(function()
+        for _, d in ipairs(gen:GetDescendants()) do
+            if d:IsA("NumberValue") or d:IsA("IntValue") or d:IsA("DoubleConstrainedValue") then
+                local n = d.Name:lower()
+                if n:find("progress", 1, true) or n:find("percent", 1, true)
+                    or n:find("repair", 1, true) or n:find("charge", 1, true)
+                    or n:find("completion", 1, true) or n == "value" then
+                    consider(d.Value)
+                end
+            elseif d:IsA("TextLabel") or d:IsA("TextButton") then
+                local t = tostring(d.Text or "")
+                local pct = tonumber(string.match(t, "(%d+)%s*%%"))
+                if pct then consider(pct) end
+            elseif d:IsA("GuiObject") then
+                local n = d.Name:lower()
+                if (n:find("fill", 1, true) or n:find("bar", 1, true) or n:find("progress", 1, true))
+                    and d.Size and d.Size.X then
+                    local scale = d.Size.X.Scale
+                    if scale and scale > 0 and scale <= 1.05 then
+                        consider(scale * 100)
+                    end
+                end
+            end
+        end
+    end)
+
+    return best or 0
+end
+
+local function isGeneratorCompleted(gen)
+    if not gen or not gen.Parent then return true end
+    if completedGenBlacklist[gen] and (os.clock() - completedGenBlacklist[gen]) < GEN_BLACKLIST_SEC then
+        return true
+    end
+    local pk = genPosKey(gen)
+    if pk and completedGenPosKeys[pk] and (os.clock() - completedGenPosKeys[pk]) < GEN_BLACKLIST_SEC then
+        return true
+    end
+
+    local progress = getGeneratorProgress(gen)
+    if progress > 99 then
+        return true
+    end
+
+    for _, a in ipairs({"Completed", "Complete", "Done", "Finished", "Repaired", "IsCompleted", "Fixed", "IsFixed"}) do
+        local v = gen:GetAttribute(a)
+        if v == true or v == 1 then return true end
+    end
+
+    return false
+end
+
+local function isGeneratorUsable(gen)
+    if not gen or not gen.Parent then return false end
+    if isGeneratorCompleted(gen) then return false end
+    if lastWorkedGen == gen and (os.clock() - lastWorkedAt) < 10 then
+        return false
+    end
+    return true
+end
+
+local function markGeneratorDone(gen)
+    if not gen then return end
+    completedGenBlacklist[gen] = os.clock()
+    local pk = genPosKey(gen)
+    if pk then completedGenPosKeys[pk] = os.clock() end
+    lastWorkedGen = gen
+    lastWorkedAt = os.clock()
+end
+
+local function getIngameGenerators()
+    local now = os.clock()
+    if now - genCacheAt < 4.0 and #genCache > 0 then
+        local alive = {}
+        for _, g in ipairs(genCache) do
+            if g and g.Parent then table.insert(alive, g) end
+        end
+        genCache = alive
+        if #genCache > 0 then return genCache end
+    end
+    genCacheAt = now
+    local gens = {}
+    local seen = {}
+    local function addGen(obj)
+        if not obj or seen[obj] then return end
+        if obj:IsA("BasePart") then
+            local m = obj:FindFirstAncestorOfClass("Model")
+            if m and m.Name:lower():find("gen", 1, true) then
+                obj = m
+            end
+        end
+        if seen[obj] then return end
+        seen[obj] = true
+        table.insert(gens, obj)
+    end
+    local roots = {}
+    local mapFolder = workspace:FindFirstChild("Map")
+    if mapFolder then
+        table.insert(roots, mapFolder)
+        local ingame = mapFolder:FindFirstChild("Ingame")
+        if ingame then
+            table.insert(roots, ingame)
+            local im = ingame:FindFirstChild("Map")
+            if im then table.insert(roots, im) end
+        end
+    end
+    for _, n in ipairs({"Generators", "Objectives", "Ingame"}) do
+        local f = workspace:FindFirstChild(n)
+        if f then table.insert(roots, f) end
+    end
+    if #roots == 0 then
+        table.insert(roots, workspace)
+    end
+    for _, root in ipairs(roots) do
+        pcall(function()
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("Model") then
+                    local oName = obj.Name:lower()
+                    if oName:find("generator", 1, true)
+                        or (oName == "gen")
+                        or (oName:find("gen", 1, true) and not oName:find("gender", 1, true)
+                            and not oName:find("agent", 1, true) and not oName:find("regen", 1, true)) then
+                        addGen(obj)
+                    end
+                end
+            end
+        end)
+        if #gens >= 12 then break end
+    end
+    genCache = gens
+    genCacheAt = os.clock()
+    return gens
+end
+
+workspace.DescendantAdded:Connect(function(desc)
+    if desc:IsA("Model") then
+        local n = desc.Name:lower()
+        if n:find("generator", 1, true) or n == "gen" then
+            genCacheAt = 0
+        end
+    end
+end)
+
+local function getUsableGenerators()
+    local list = {}
+    for _, g in ipairs(getIngameGenerators()) do
+        if isGeneratorUsable(g) then
+            table.insert(list, g)
+        end
+    end
+    return list
+end
+
+local itemCache = {}
+local itemMap = {}
+local itemScanRunning = false
+
+local function isItemValid(obj)
+    if not obj or not obj.Parent then return false end
+    if LP.Character and obj:IsDescendantOf(LP.Character) then return false end
+    local model = obj:IsA("Model") and obj or obj:FindFirstAncestorOfClass("Model")
+    if model and model:FindFirstChildOfClass("Humanoid") then return false end
+    
+    if obj:IsA("Tool") then
+        return obj:IsDescendantOf(workspace)
+    end
+    return false
+end
+
+local function trackItem(desc)
+    if not desc then return end
+    if desc:IsA("Tool") and isItemValid(desc) and not itemMap[desc] then
+        itemMap[desc] = true
+        table.insert(itemCache, desc)
+    end
+end
+
+local function initItemCache()
+    if itemScanRunning then return end
+    itemScanRunning = true
+    itemCache = {}
+    itemMap = {}
+    task.spawn(function()
+        local all = workspace:GetDescendants()
+        for i, desc in ipairs(all) do
+            trackItem(desc)
+            if i % 350 == 0 then task.wait() end
+        end
+        itemScanRunning = false
+    end)
+end
+
+workspace.DescendantAdded:Connect(function(desc)
+    if states.itemEsp then trackItem(desc) end
+end)
+
+workspace.DescendantRemoving:Connect(function(desc)
+    if itemMap[desc] then
+        itemMap[desc] = nil
+    end
+end)
+
+local function getIngameItems()
+    local alive, newMap = {}, {}
+    for _, it in ipairs(itemCache) do
+        if isItemValid(it) then
+            alive[#alive + 1] = it
+            newMap[it] = true
+        end
+    end
+    itemCache, itemMap = alive, newMap
+    return itemCache
+end
+
+local function getPlayerRoleFolder(player)
+    if not player or not player.Character then return "Survivors" end
+    local char = player.Character
+    local parent = char.Parent
+
+    if parent and parent.Parent and parent.Parent.Name == "Players" then
+        return parent.Name
+    end
+
+    local playersFolder = workspace:FindFirstChild("Players")
+    if playersFolder then
+        local killers = playersFolder:FindFirstChild("Killers")
+        if killers and char:IsDescendantOf(killers) then return "Killers" end
+        local spectating = playersFolder:FindFirstChild("Spectating")
+        if spectating and char:IsDescendantOf(spectating) then return "Spectating" end
+        local survivors = playersFolder:FindFirstChild("Survivors")
+        if survivors and char:IsDescendantOf(survivors) then return "Survivors" end
+    end
+    return "Survivors"
+end
+
+local function getRootPart()
+    local char = LP.Character
+    return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
+end
+
+local function recordLobbyPosition()
+    local root = getRootPart()
+    if not root then return end
+    local now = os.clock()
+    lobbyHistory[#lobbyHistory + 1] = {t = now, cf = root.CFrame}
+    local cutoff = now - lobbyHistoryMax
+    local first = 1
+    while lobbyHistory[first] and lobbyHistory[first].t < cutoff do first += 1 end
+    if first > 1 then
+        local compact = {}
+        for i = first, #lobbyHistory do compact[#compact + 1] = lobbyHistory[i] end
+        lobbyHistory = compact
+    end
+end
+
+local function getPastLobbyCFrame(secondsBack)
+    local now = os.clock()
+    local targetTime = now - math.clamp(secondsBack or 0.5, 0.1, lobbyHistoryMax)
+    local best = nil
+    for i = #lobbyHistory, 1, -1 do
+        local sample = lobbyHistory[i]
+        if sample.t <= targetTime then
+            best = sample.cf
+            break
+        end
+    end
+    if not best and lobbyHistory[1] then best = lobbyHistory[1].cf end
+    return best
+end
+
+local function lobbySafeTeleport(secondsBack)
+    local cf = getPastLobbyCFrame(secondsBack)
+    if not cf then return false end
+    safeTeleport(cf)
+    return true
+end
+
+safeTeleport = function(targetCFrame)
+    local myChar = LP.Character
+    if not myChar then return end
+    local hrp = myChar:FindFirstChild("HumanoidRootPart")
+    local hum = myChar:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+
+    if states.safeSpectatorTp then
+        hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        for _, part in ipairs(myChar:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanTouch = false
+                part.Velocity = Vector3.zero
+                part.RotVelocity = Vector3.zero
+            end
+        end
+    end
+
+    hrp.CFrame = targetCFrame
+
+    if states.safeSpectatorTp then
+        task.delay(1.5, function()
+            if myChar and myChar.Parent then
+                for _, part in ipairs(myChar:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanTouch = true
+                    end
+                end
+                if hum and hum.Parent then
+                    hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+                end
+            end
+        end)
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if states.ctrlClickTp and input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
+            if Mouse.Hit then
+                safeTeleport(Mouse.Hit + Vector3.new(0, 3, 0))
+            end
+        end
+    end
+end)
+
+local function isKillerDoorPart(desc)
+    if not desc:IsA("BasePart") then return false end
+    local lname = desc.Name:lower()
+    local pname = desc.Parent and desc.Parent.Name:lower() or ""
+    local gname = desc.Parent and desc.Parent.Parent and desc.Parent.Parent.Name:lower() or ""
+    if lname:find("killerdoor", 1, true) or lname:find("killer_door", 1, true) then return true end
+    if pname:find("killerdoor", 1, true) or pname:find("killer_door", 1, true) then return true end
+    if lname:find("killer", 1, true) and lname:find("door", 1, true) then return true end
+    if pname:find("killer", 1, true) and (lname:find("door", 1, true) or pname:find("door", 1, true)) then return true end
+    if gname:find("killer", 1, true) and lname:find("door", 1, true) then return true end
+    if (lname == "door" or lname == "gate" or lname == "slide") and (pname:find("killer", 1, true) or gname:find("killer", 1, true)) then
+        return true
+    end
+    return false
+end
+
+local killerDoorCache = {}
+local killerDoorMap = {}
+
+local function addKillerDoor(desc)
+    if isKillerDoorPart(desc) and not killerDoorMap[desc] then
+        killerDoorMap[desc] = true
+        table.insert(killerDoorCache, desc)
+        if states.killerDoors then
+            if desc:GetAttribute("OrigCanCollide") == nil then
+                desc:SetAttribute("OrigCanCollide", desc.CanCollide)
+            end
+            desc.CanCollide = false
+        end
+    end
+end
+
+local function scanKillerDoors()
+    killerDoorCache = {}
+    killerDoorMap = {}
+    for _, desc in ipairs(workspace:GetDescendants()) do
+        addKillerDoor(desc)
+    end
+end
+
+workspace.DescendantAdded:Connect(function(desc)
+    if states.killerDoors then
+        addKillerDoor(desc)
+    end
+end)
+
+local function updateKillerDoors()
+    if states.killerDoors then
+        if #killerDoorCache == 0 then
+            scanKillerDoors()
+        else
+            for _, desc in ipairs(killerDoorCache) do
+                if desc and desc.Parent then
+                    if desc:GetAttribute("OrigCanCollide") == nil then
+                        desc:SetAttribute("OrigCanCollide", desc.CanCollide)
+                    end
+                    desc.CanCollide = false
+                end
+            end
+        end
+    else
+        for _, desc in ipairs(killerDoorCache) do
+            if desc and desc.Parent and desc:GetAttribute("OrigCanCollide") ~= nil then
+                desc.CanCollide = desc:GetAttribute("OrigCanCollide")
+                desc:SetAttribute("OrigCanCollide", nil)
+            end
+        end
+        killerDoorCache = {}
+        killerDoorMap = {}
+    end
+end
+
+local function isLikelyFloor(part)
+    local s = part.Size
+    if s.Y <= 3 and (s.X >= 12 or s.Z >= 12) then return true end
+    if s.Y <= 2 and s.X * s.Z >= 40 then return true end
+    local n = part.Name:lower()
+    if n:find("floor", 1, true) or n:find("ground", 1, true) or n:find("baseplate", 1, true)
+        or n:find("terrain", 1, true) or n:find("ceiling", 1, true) then
+        return true
+    end
+    return false
+end
+
+local function updateBarriers()
+    if states.noBarriers then
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc:IsA("BasePart") and not isLikelyFloor(desc) then
+                local lname = desc.Name:lower()
+                local isBarrierName = lname:find("barrier", 1, true)
+                    or lname:find("invisiblewall", 1, true)
+                    or lname:find("anti", 1, true)
+                    or lname:find("blocker", 1, true)
+                    or lname:find("nocollide", 1, true)
+                    or (lname:find("clip", 1, true) and not lname:find("script", 1, true))
+                if isBarrierName and desc.CanCollide then
+                    if barrierOriginalState[desc] == nil then
+                        barrierOriginalState[desc] = true
+                    end
+                    desc.CanCollide = false
+                end
+            end
+        end
+    else
+        for part, origState in pairs(barrierOriginalState) do
+            if part and part.Parent then
+                part.CanCollide = origState
+            end
+        end
+        barrierOriginalState = {}
+    end
+end
+
+local function teleportToGenerator()
+    local gens = getIngameGenerators()
+    if #gens > 0 then
+        local target = gens[1]
+        local targetCFrame = target:IsA("Model") and target:GetPivot() or target.CFrame
+        safeTeleport(targetCFrame * CFrame.new(0, 3, 0))
+    end
+end
+
+local function firePrompt(prompt)
+    if not prompt then return false end
+    local holdTime = math.max(tonumber(prompt.HoldDuration) or 0, 0.35)
+
+    if typeof(fireproximityprompt) == "function" then
+        local ok = pcall(function()
+            fireproximityprompt(prompt)
+        end)
+        if ok then
+            task.wait(0.15)
+            return true
+        end
+        ok = pcall(function()
+            fireproximityprompt(prompt, holdTime)
+        end)
+        if ok then return true end
+    end
+
+    local ok = pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(holdTime + 0.12)
+        prompt:InputHoldEnd()
+    end)
+    return ok
+end
+
+local function getNearestPrompt(fromPos, root)
+    local best, bestD = nil, math.huge
+    local list = {}
+    if root then
+        for _, o in ipairs(root:GetDescendants()) do
+            if o:IsA("ProximityPrompt") then table.insert(list, o) end
+        end
+    else
+        for _, o in ipairs(workspace:GetDescendants()) do
+            if o:IsA("ProximityPrompt") and o.Enabled then
+                local p = o.Parent
+                if p and p:IsA("BasePart") then
+                    local d = (fromPos - p.Position).Magnitude
+                    if d < 18 then table.insert(list, o) end
+                end
+            end
+        end
+    end
+    for _, o in ipairs(list) do
+        if o.Enabled or o.Enabled == nil then
+            local part = o.Parent
+            local pos = part and part:IsA("BasePart") and part.Position
+            if pos then
+                local d = (fromPos - pos).Magnitude
+                if d < bestD then
+                    bestD = d
+                    best = o
+                end
+            end
+        end
+    end
+    return best, bestD
+end
+
+local function autoFixGenerator(targetGenerator)
+    local gens = getIngameGenerators()
+    local myChar = LP.Character
+    local hrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+    if not hrp then return false end
+
+    local closestGen = targetGenerator
+    local minDist = math.huge
+    if not closestGen then
+        for _, gen in ipairs(gens) do
+            local pos = gen:IsA("Model") and gen:GetPivot().Position or gen.Position
+            local dist = (hrp.Position - pos).Magnitude
+            if dist < minDist then
+                minDist = dist
+                closestGen = gen
+            end
+        end
+    else
+        local pos = closestGen:IsA("Model") and closestGen:GetPivot().Position or closestGen.Position
+        minDist = (hrp.Position - pos).Magnitude
+    end
+
+    if not closestGen then return false end
+
+    local prompt, pDist = getNearestPrompt(hrp.Position, closestGen)
+    if not prompt then
+        prompt, pDist = getNearestPrompt(hrp.Position, nil)
+    end
+
+    if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") and hum then
+        local part = prompt.Parent
+        local maxDist = (prompt.MaxActivationDistance or 10) * 0.85
+        if (hrp.Position - part.Position).Magnitude > math.min(maxDist, 4) then
+            hum:MoveTo(part.Position)
+            local t0 = os.clock()
+            while os.clock() - t0 < 2.0 and (hrp.Position - part.Position).Magnitude > 3.0 do
+                task.wait(0.05)
+            end
+        end
+    end
+
+    if prompt then
+        return firePrompt(prompt)
+    end
+    return false
+end
+
+local GuiService = game:GetService("GuiService")
+local VIM = game:GetService("VirtualInputManager")
+
+local function toVimXY(guiObj)
+    local pos = guiObj.AbsolutePosition
+    local size = guiObj.AbsoluteSize
+    local inset = GuiService:GetGuiInset()
+    local x = pos.X + size.X / 2
+    local y = pos.Y + size.Y / 2 + inset.Y
+    return x, y
+end
+
+local function mouseMove(x, y)
+    pcall(function()
+        VIM:SendMouseMoveEvent(x, y, game)
+    end)
+end
+
+local function mouseDown(x, y)
+    pcall(function()
+        VIM:SendMouseMoveEvent(x, y, game)
+    end)
+    task.wait(0.03)
+    pcall(function()
+        VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    end)
+end
+
+local function mouseUp(x, y)
+    pcall(function()
+        VIM:SendMouseMoveEvent(x, y, game)
+    end)
+    task.wait(0.02)
+    pcall(function()
+        VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+end
+
+local function cellCenter(guiObj)
+    return toVimXY(guiObj)
+end
+
+local function findPuzzleGrid()
+    local pgui = LP:FindFirstChildOfClass("PlayerGui")
+    if not pgui then return nil end
+    for _, gui in ipairs(pgui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Enabled then
+            local holder = gui:FindFirstChild("GridHolder", true)
+            if holder then
+                local g = holder:FindFirstChild("Grid")
+                if g then return g end
+            end
+            local g = gui:FindFirstChild("Grid", true)
+            if g and g:IsA("GuiObject") then
+                if g:FindFirstChild("1-1") or g:FindFirstChild("0-0") or g:FindFirstChild("1-2")
+                    or g:FindFirstChild("2-2") or g:FindFirstChild("1-0") then
+                    return g
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function parsePuzzleGrid(grid)
+    local cells = {}
+    local pairsMap = {}
+    local maxR, maxC = 0, 0
+
+    for _, child in ipairs(grid:GetChildren()) do
+        if child:IsA("GuiObject") then
+            local r, c = string.match(child.Name, "^(%d+)%-(%d+)$")
+            if r and c then
+                r, c = tonumber(r), tonumber(c)
+                maxR = math.max(maxR, r)
+                maxC = math.max(maxC, c)
+                cells[r] = cells[r] or {}
+                cells[r][c] = child
+
+                local circle = child:FindFirstChild("Circle")
+                local numLabel = circle and circle:FindFirstChild("Number")
+                if numLabel and numLabel:IsA("TextLabel") then
+                    local textValue = tostring(numLabel.Text or ""):match("^%s*(%d+)%s*$")
+                    local n = tonumber(textValue)
+                    if n then
+                        pairsMap[n] = pairsMap[n] or {}
+                        table.insert(pairsMap[n], {row = r, col = c, frame = child})
+                    end
+                end
+            end
+        end
+    end
+    return cells, pairsMap, math.max(maxR, maxC)
+end
+
+local function cellKey(r, c)
+    return r * 100 + c
+end
+
+local DIRS4 = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+
+local function reachable(cells, size, start, goal, blocked)
+    local sk = cellKey(start.row, start.col)
+    local gk = cellKey(goal.row, goal.col)
+    if sk == gk then return true end
+    local q = {{start.row, start.col}}
+    local seen = {[sk] = true}
+    local qi = 1
+    while qi <= #q do
+        local r, c = q[qi][1], q[qi][2]
+        qi += 1
+        for _, d in ipairs(DIRS4) do
+            local nr, nc = r + d[1], c + d[2]
+            if cells[nr] and cells[nr][nc] then
+                local k = cellKey(nr, nc)
+                if not seen[k] then
+                    local isGoal = (k == gk)
+                    if isGoal or not blocked[k] then
+                        if isGoal then return true end
+                        seen[k] = true
+                        table.insert(q, {nr, nc})
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function collectPaths(cells, size, start, goal, blocked, maxPaths, deadline)
+    maxPaths = maxPaths or 256
+    deadline = deadline or (os.clock() + 1.5)
+    local results = {}
+    local path = {{row = start.row, col = start.col}}
+    local visited = {[cellKey(start.row, start.col)] = true}
+    local gr, gc = goal.row, goal.col
+    local nodes = 0
+    local maxLen = size * size
+
+    local function dfs(r, c)
+        if #results >= maxPaths or os.clock() > deadline then return end
+        nodes += 1
+        if nodes % 350 == 0 then task.wait() end
+        if #path > maxLen then return end
+
+        if r == gr and c == gc then
+            local copy = {}
+            for i = 1, #path do
+                copy[i] = {row = path[i].row, col = path[i].col}
+            end
+            results[#results + 1] = copy
+            return
+        end
+
+        local distance = math.abs(r - gr) + math.abs(c - gc)
+        local remaining = maxLen - #path + 1
+        if distance > remaining then return end
+
+        local neigh = {}
+        for _, d in ipairs(DIRS4) do
+            local nr, nc = r + d[1], c + d[2]
+            if cells[nr] and cells[nr][nc] then
+                local k = cellKey(nr, nc)
+                local isGoal = (nr == gr and nc == gc)
+                if not visited[k] and (isGoal or not blocked[k]) then
+                    neigh[#neigh + 1] = {
+                        nr = nr,
+                        nc = nc,
+                        k = k,
+                        dist = math.abs(nr - gr) + math.abs(nc - gc),
+                    }
+                end
+            end
+        end
+        table.sort(neigh, function(a, b)
+            if a.dist ~= b.dist then return a.dist < b.dist end
+            return a.k < b.k
+        end)
+
+        for _, n in ipairs(neigh) do
+            visited[n.k] = true
+            path[#path + 1] = {row = n.nr, col = n.nc}
+            dfs(n.nr, n.nc)
+            path[#path] = nil
+            visited[n.k] = nil
+            if #results >= maxPaths or os.clock() > deadline then return end
+        end
+    end
+
+    dfs(start.row, start.col)
+    table.sort(results, function(a, b)
+        if #a ~= #b then return #a > #b end
+        return tostring(a[2] and a[2].row or 0) < tostring(b[2] and b[2].row or 0)
+    end)
+    return results
+end
+
+local function makeEndpointMap(pairList)
+    local endpointKeys = {}
+    for _, p in ipairs(pairList) do
+        endpointKeys[cellKey(p.a.row, p.a.col)] = p.num
+        endpointKeys[cellKey(p.b.row, p.b.col)] = p.num
+    end
+    return endpointKeys
+end
+
+local function freeSpaceFeasible(cells, size, pairList, solvedSet, occupied, endpointKeys)
+    local free = {}
+    for r = 1, size do
+        for c = 1, size do
+            if cells[r] and cells[r][c] then
+                local k = cellKey(r, c)
+                if not occupied[k] then
+                    free[k] = true
+                end
+            end
+        end
+    end
+
+    for _, p in ipairs(pairList) do
+        if not solvedSet[p.num] then
+            local ak = cellKey(p.a.row, p.a.col)
+            local bk = cellKey(p.b.row, p.b.col)
+            if not free[ak] or not free[bk] then return false end
+        end
+    end
+
+    local seen = {}
+    for r = 1, size do
+        for c = 1, size do
+            local sk = cellKey(r, c)
+            if free[sk] and not seen[sk] then
+                local q = {{r, c}}
+                seen[sk] = true
+                local qi = 1
+                local hasEndpoint = false
+                while qi <= #q do
+                    local cr, cc = q[qi][1], q[qi][2]
+                    qi += 1
+                    local ck = cellKey(cr, cc)
+                    if endpointKeys[ck] and not solvedSet[endpointKeys[ck]] then
+                        hasEndpoint = true
+                    end
+                    for _, d in ipairs(DIRS4) do
+                        local nr, nc = cr + d[1], cc + d[2]
+                        if cells[nr] and cells[nr][nc] then
+                            local nk = cellKey(nr, nc)
+                            if free[nk] and not seen[nk] then
+                                seen[nk] = true
+                                q[#q + 1] = {nr, nc}
+                            end
+                        end
+                    end
+                end
+                if not hasEndpoint then return false end
+            end
+        end
+    end
+
+    for _, p in ipairs(pairList) do
+        if not solvedSet[p.num] then
+            local blocked = {}
+            for k in pairs(occupied) do blocked[k] = true end
+            for k, num in pairs(endpointKeys) do
+                if num ~= p.num then blocked[k] = true end
+            end
+            if not reachable(cells, size, p.a, p.b, blocked) then return false end
+        end
+    end
+    return true
+end
+
+local function getCandidates(cells, size, pair, solvedSet, occupied, endpointKeys, deadline, maxPaths)
+    local blocked = {}
+    for k in pairs(occupied) do blocked[k] = true end
+    for k, num in pairs(endpointKeys) do
+        if num ~= pair.num then blocked[k] = true end
+    end
+    return collectPaths(cells, size, pair.a, pair.b, blocked, maxPaths or 220, deadline)
+end
+
+local function planAllPaths(cells, size, pairList)
+    if #pairList == 0 then return {} end
+    local endpointKeys = makeEndpointMap(pairList)
+    local occupied = {}
+    local solvedSet = {}
+    local solution = {}
+    local totalCells = 0
+    for r = 1, size do
+        for c = 1, size do
+            if cells[r] and cells[r][c] then totalCells += 1 end
+        end
+    end
+
+    local deadline = os.clock() + 2.5
+    local nodes = 0
+
+    local function apply(path)
+        for _, node in ipairs(path) do
+            occupied[cellKey(node.row, node.col)] = true
+        end
+    end
+    local function undo(path)
+        for _, node in ipairs(path) do
+            occupied[cellKey(node.row, node.col)] = nil
+        end
+    end
+
+    local function choosePair()
+        local best, bestCandidates, bestCount = nil, nil, math.huge
+        for _, p in ipairs(pairList) do
+            if not solvedSet[p.num] then
+                local candidates = getCandidates(cells, size, p, solvedSet, occupied, endpointKeys, deadline, 36)
+                local count = #candidates
+                if count == 0 then return p, {} end
+                if count < bestCount then
+                    best, bestCandidates, bestCount = p, candidates, count
+                    if count == 1 then break end
+                end
+            end
+        end
+        return best, bestCandidates
+    end
+
+    local function search(depth)
+        nodes += 1
+        if nodes % 24 == 0 then task.wait() end
+        if os.clock() > deadline then return false end
+        if depth > #pairList then
+            local used = 0
+            for _ in pairs(occupied) do used += 1 end
+            return used == totalCells
+        end
+
+        local pair, candidates = choosePair()
+        if not pair or not candidates or #candidates == 0 then return false end
+
+        for _, path in ipairs(candidates) do
+            if os.clock() > deadline then return false end
+            apply(path)
+            solvedSet[pair.num] = true
+            solution[depth] = {num = pair.num, path = path}
+
+            if freeSpaceFeasible(cells, size, pairList, solvedSet, occupied, endpointKeys) then
+                if search(depth + 1) then return true end
+            end
+
+            solution[depth] = nil
+            solvedSet[pair.num] = nil
+            undo(path)
+        end
+        return false
+    end
+
+    if not search(1) then return nil end
+
+    local used = 0
+    for _ in pairs(occupied) do used += 1 end
+    if used ~= totalCells then return nil end
+
+    local ordered = {}
+    for i = 1, #solution do
+        ordered[#ordered + 1] = solution[i].path
+    end
+    return ordered
+end
+
+local function verifyPlannedPaths(cells, size, pairList, planned)
+    if not planned or #planned ~= #pairList then return false end
+    local occupied = {}
+    local endpoints = makeEndpointMap(pairList)
+    local pairByNum = {}
+    local total = 0
+    for r = 1, size do
+        for c = 1, size do
+            if cells[r] and cells[r][c] then total += 1 end
+        end
+    end
+    for _, pair in ipairs(pairList) do
+        pairByNum[pair.num] = pair
+    end
+
+    for _, path in ipairs(planned) do
+        if not path or #path < 2 then return false end
+        local firstKey = cellKey(path[1].row, path[1].col)
+        local lastKey = cellKey(path[#path].row, path[#path].col)
+        local numA = endpoints[firstKey]
+        local numB = endpoints[lastKey]
+        if not numA or numA ~= numB or not pairByNum[numA] then return false end
+        local pair = pairByNum[numA]
+        local aKey = cellKey(pair.a.row, pair.a.col)
+        local bKey = cellKey(pair.b.row, pair.b.col)
+        if not ((firstKey == aKey and lastKey == bKey) or (firstKey == bKey and lastKey == aKey)) then
+            return false
+        end
+
+        for j, node in ipairs(path) do
+            local k = cellKey(node.row, node.col)
+            if occupied[k] then return false end
+            occupied[k] = numA
+            if j > 1 then
+                local prev = path[j - 1]
+                if math.abs(node.row - prev.row) + math.abs(node.col - prev.col) ~= 1 then return false end
+            end
+            local endpointNum = endpoints[k]
+            if endpointNum and endpointNum ~= numA then return false end
+        end
+    end
+
+    local used = 0
+    for _ in pairs(occupied) do used += 1 end
+    return used == total
+end
+
+local function dragAlongPath(cells, path)
+    if not path or #path < 2 then return false end
+    local first = cells[path[1].row] and cells[path[1].row][path[1].col]
+    if not first then return false end
+    local x0, y0 = cellCenter(first)
+    mouseDown(x0, y0)
+    task.wait(0.02)
+    for i = 2, #path do
+        local cell = cells[path[i].row] and cells[path[i].row][path[i].col]
+        if cell then
+            local x, y = cellCenter(cell)
+            mouseMove(x, y)
+            task.wait(0.012)
+        end
+    end
+    local last = path[#path]
+    local lastCell = cells[last.row] and cells[last.row][last.col]
+    if lastCell then
+        local x1, y1 = cellCenter(lastCell)
+        mouseUp(x1, y1)
+    else
+        mouseUp(x0, y0)
+    end
+    task.wait(0.05)
+    return true
+end
+
+local solveBusy = false
+local function solveNumberlinkOnce()
+    if solveBusy then return false end
+    solveBusy = true
+    local success = false
+    local ok = pcall(function()
+        local grid = findPuzzleGrid()
+        if not grid or not grid.Visible then return end
+        local cells, pairsMap, size = parsePuzzleGrid(grid)
+        if size < 2 then return end
+
+        local pairList = {}
+        local totalCells = 0
+        for r = 1, size do
+            for c = 1, size do
+                if cells[r] and cells[r][c] then totalCells += 1 end
+            end
+        end
+
+        for num, ends in pairs(pairsMap) do
+            if #ends == 2 then
+                table.insert(pairList, {num = num, a = ends[1], b = ends[2]})
+            end
+        end
+        if #pairList == 0 or totalCells == 0 then return end
+
+        for _, p in ipairs(pairList) do
+            p.dist = math.abs(p.a.row - p.b.row) + math.abs(p.a.col - p.b.col)
+        end
+
+        local planned = planAllPaths(cells, size, pairList)
+        if not verifyPlannedPaths(cells, size, pairList, planned) then return end
+
+        for _, path in ipairs(planned) do
+            if not states.autoSolveGen and not states.botEnabled then return end
+            local done = dragAlongPath(cells, path)
+            if not done then return end
+            task.wait(0.05)
+        end
+
+        task.wait(0.15)
+        success = true
+    end)
+    solveBusy = false
+    return ok and success
+end
+
+local function checkAndSolveGenUI(force)
+    if (not states.autoSolveGen and not force) or isSolvingGen or solveBusy then return false end
+    isSolvingGen = true
+    local ok, result = pcall(function()
+        return solveNumberlinkOnce()
+    end)
+    isSolvingGen = false
+    return ok and result
+end
+
+local function moveToPoint(hum, hrp, targetPosition, timeout, activeCheck, arriveDist)
+    arriveDist = arriveDist or 3.2
+    local reached = false
+    local conn
+    conn = hum.MoveToFinished:Connect(function(ok)
+        reached = ok
+    end)
+    hum:MoveTo(targetPosition)
+    local started = os.clock()
+    while activeCheck() and os.clock() - started < (timeout or 1.1) do
+        if (hrp.Position - targetPosition).Magnitude <= arriveDist then
+            reached = true
+            break
+        end
+        if reached then break end
+        task.wait(0.03)
+    end
+    if conn then conn:Disconnect() end
+    return reached
+end
+
+local function followPath(hum, hrp, fromPos, toPos, activeCheck, opts)
+    opts = opts or {}
+    local smooth = opts.smooth == true
+    local stopDist = opts.stopDist or 7
+
+    local offsets = {
+        Vector3.zero,
+        Vector3.new(3.5, 0, 0), Vector3.new(-3.5, 0, 0),
+        Vector3.new(0, 0, 3.5), Vector3.new(0, 0, -3.5),
+        Vector3.new(2.5, 0, 2.5), Vector3.new(-2.5, 0, 2.5),
+        Vector3.new(2.5, 0, -2.5), Vector3.new(-2.5, 0, -2.5),
+        Vector3.new(5, 0, 0), Vector3.new(-5, 0, 0),
+        Vector3.new(0, 0, 5), Vector3.new(0, 0, -5),
+    }
+    if opts.noOffset then
+        offsets = { Vector3.zero }
+    end
+
+    local radii = { 1.2, 1.6, 2.2 }
+    local waypoints = nil
+    local usedGoal = toPos
+
+    for _, radius in ipairs(radii) do
+        if waypoints then break end
+        for _, off in ipairs(offsets) do
+            if not activeCheck() then return false end
+            local goal = toPos + off
+            local path = PathfindingService:CreatePath({
+                AgentRadius = radius,
+                AgentHeight = 5,
+                AgentCanJump = true,
+                AgentJumpHeight = 14,
+                WaypointSpacing = smooth and 3.2 or 2.0,
+            })
+            local ok = pcall(function()
+                path:ComputeAsync(fromPos, goal)
+            end)
+            if ok and path.Status == Enum.PathStatus.Success then
+                waypoints = path:GetWaypoints()
+                usedGoal = goal
+                break
+            end
+        end
+    end
+
+    if not waypoints or #waypoints == 0 then
+        hum:MoveTo(toPos)
+        local t0 = os.clock()
+        while activeCheck() and os.clock() - t0 < 1.2 do
+            if (hrp.Position - toPos).Magnitude <= stopDist then return true end
+            if hum.FloorMaterial == Enum.Material.Air then
+                hum.Jump = true
+            end
+            task.wait(0.08)
+        end
+        return (hrp.Position - toPos).Magnitude <= stopDist + 2
+    end
+
+    for i, waypoint in ipairs(waypoints) do
+        if not activeCheck() then return false end
+        if states.botSprint then
+            hum.WalkSpeed = getSprintSpeed()
+            setShiftHeld(true)
+        end
+        if waypoint.Action == Enum.PathWaypointAction.Jump then
+            hum.Jump = true
+        end
+        local arrive = smooth and 5.5 or 2.8
+        local timeout = smooth and 0.55 or 0.9
+        if smooth and i < #waypoints then
+            hum:MoveTo(waypoint.Position)
+            local t0 = os.clock()
+            while activeCheck() and os.clock() - t0 < timeout do
+                local d = (hrp.Position - waypoint.Position).Magnitude
+                if d <= arrive then break end
+                if (hrp.Position - usedGoal).Magnitude <= stopDist then return true end
+                task.wait(0.03)
+            end
+        else
+            moveToPoint(hum, hrp, waypoint.Position, timeout, activeCheck, arrive)
+        end
+        if (hrp.Position - toPos).Magnitude <= stopDist then
+            return true
+        end
+        if i % 8 == 0 and (hrp.Position - waypoint.Position).Magnitude > 10 then
+            return followPath(hum, hrp, hrp.Position, toPos, activeCheck, opts)
+        end
+    end
+    return true
+end
+
+local scriptAlive = true
+local menuVisible = true
+local tabs = nil
+local gui, main
+local flyBV, flyBG
+local connections = {}
+
+local function bind(conn)
+    table.insert(connections, conn)
+    return conn
+end
+
+local function getGuest666Killer()
+    local guestKillerChar = nil
+    local anyKillerChar = nil
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP then
+            local role = getPlayerRoleFolder(p)
+            if role == "Killers" and p.Character then
+                local char = p.Character
+                local nameLower = string.lower(p.Name .. " " .. p.DisplayName .. " " .. char.Name)
+                if nameLower:find("666") or nameLower:find("guest") then
+                    guestKillerChar = char
+                    break
+                else
+                    anyKillerChar = char
+                end
+            end
+        end
+    end
+    return guestKillerChar or anyKillerChar
+end
+
+local backWeld = nil
+
+local function updateBackSeat()
+    local myChar = LP.Character
+    if not myChar then return end
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    local myHum = myChar:FindFirstChildOfClass("Humanoid")
+    
+    if states.backTeleport then
+        local targetChar = getGuest666Killer()
+        if targetChar and myHrp and myHum then
+            local targetTorso = targetChar:FindFirstChild("UpperTorso") 
+                or targetChar:FindFirstChild("Torso") 
+                or targetChar:FindFirstChild("HumanoidRootPart")
+            
+            if targetTorso then
+                if not backWeld or backWeld.Parent ~= myHrp or backWeld.Part1 ~= targetTorso then
+                    if backWeld then backWeld:Destroy() end
+                    myHrp.CFrame = targetTorso.CFrame * CFrame.new(0, -0.2, 1.2) * CFrame.Angles(0, math.pi, 0)
+                    
+                    backWeld = Instance.new("Weld")
+                    backWeld.Name = "Guest666BackSeatWeld"
+                    backWeld.Part0 = myHrp
+                    backWeld.Part1 = targetTorso
+                    backWeld.C0 = CFrame.new(0, -0.2, 1.2) * CFrame.Angles(0, math.pi, 0)
+                    backWeld.Parent = myHrp
+                end
+                
+                myHum.Sit = true
+                myHum.Jump = false
+                myHrp.AssemblyLinearVelocity = Vector3.zero
+                myHrp.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+    else
+        if backWeld then
+            backWeld:Destroy()
+            backWeld = nil
+        end
+        if myHum then
+            myHum.Sit = false
+        end
+    end
+end
+
+local currentPlayingAnimTrack = nil
+
+local function playCustomAnimation(animId)
+    local char = LP.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+    
+    local cleanId = tostring(animId):gsub("%D", "")
+    if cleanId == "" then return end
+    
+    if currentPlayingAnimTrack then
+        currentPlayingAnimTrack:Stop()
+        currentPlayingAnimTrack = nil
+    end
+    
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://" .. cleanId
+    
+    local ok, track = pcall(function()
+        return animator:LoadAnimation(anim)
+    end)
+    
+    if ok and track then
+        currentPlayingAnimTrack = track
+        track:Play()
+    end
+end
+
+local noclipAcc, solveAcc, doorAcc = 0, 0, 0
+local espAcc, genEspAcc, itemEspAcc = 0, 0, 0
+local antiFlowerAcc = 0
+local godModeAcc = 0
+local hpEspAcc = 0
+
+bind(RunService.Heartbeat:Connect(function(dt)
+    if not scriptAlive or _G.__ForsakenHubGeneration ~= hubGeneration then return end
+
+    lobbyHistoryAcc += dt
+    if lobbyHistoryAcc >= 0.04 then
+        lobbyHistoryAcc = 0
+        pcall(recordLobbyPosition)
+    end
+
+    pcall(updateBackSeat)
+
+    if states.antiFlower then
+        antiFlowerAcc += dt
+        if antiFlowerAcc >= 1.5 then
+            antiFlowerAcc = 0
+            for _, desc in ipairs(workspace:GetDescendants()) do
+                if desc:IsA("Model") or desc:IsA("BasePart") or desc:IsA("Folder") then
+                    local n = desc.Name:lower()
+                    if n:find("flower", 1, true) or n:find("dusikar", 1, true) or n:find("dusicar", 1, true) or n:find("дусикар", 1, true) or n:find("цветок", 1, true) or n:find("цветы", 1, true) then
+                        pcall(function() desc:Destroy() end)
+                    end
+                end
+            end
+        end
+    end
+
+    if states.godMode then
+        godModeAcc += dt
+        if godModeAcc >= 0.35 then
+            godModeAcc = 0
+            local myChar = LP.Character
+            if myChar then
+                for _, child in ipairs(myChar:GetChildren()) do
+                    if child:IsA("Script") or child:IsA("LocalScript") then
+                        local cn = child.Name:lower()
+                        if cn:find("damage", 1, true) or cn:find("take", 1, true) or cn:find("hurt", 1, true) or cn:find("hit", 1, true) or cn:find("health", 1, true) then
+                            pcall(function() child.Disabled = true end)
+                        end
+                    end
+                end
+                for _, part in ipairs(myChar:GetDescendants()) do
+                    if part:IsA("TouchTransmitter") then
+                        pcall(function() part:Destroy() end)
+                    end
+                end
+            end
+        end
+    else
+        godModeAcc = 0
+    end
+
+    if states.killerDoors then
+        doorAcc += dt
+        if doorAcc >= 5.0 then
+            doorAcc = 0
+            pcall(updateKillerDoors)
+        end
+    end
+
+    local char = LP.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+    if states.noclip and char then
+        noclipAcc += dt
+        if noclipAcc >= 0.2 then
+            noclipAcc = 0
+            local hrp2 = char:FindFirstChild("HumanoidRootPart")
+            if hrp2 then hrp2.CanCollide = false end
+            for _, part in ipairs(char:GetChildren()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end
+
+    if appliedFullBright ~= states.fullBright then
+        appliedFullBright = states.fullBright
+        setFullBright(states.fullBright)
+    end
+
+    if states.flyEnabled and hrp then
+        pcall(function()
+            if not flyBV or not flyBV.Parent then
+                flyBV = Instance.new("BodyVelocity")
+                flyBV.MaxForce = Vector3.new(4e4, 4e4, 4e4)
+                flyBV.P = 1250
+                flyBV.Velocity = Vector3.zero
+                flyBV.Parent = hrp
+            end
+            if not flyBG or not flyBG.Parent then
+                flyBG = Instance.new("BodyGyro")
+                flyBG.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
+                flyBG.P = 3e3
+                flyBG.Parent = hrp
+            end
+            local cam = workspace.CurrentCamera
+            if cam then
+                flyBG.CFrame = cam.CFrame
+                local moveDir = Vector3.zero
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += cam.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= cam.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= cam.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += cam.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
+                if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
+                flyBV.Velocity = moveDir * flySpeedValue
+            end
+        end)
+    elseif flyBV or flyBG then
+        pcall(function() if flyBV then flyBV:Destroy() end end) flyBV = nil
+        pcall(function() if flyBG then flyBG:Destroy() end end) flyBG = nil
+    end
+
+    if states.autoSolveGen then
+        solveAcc += dt
+        if solveAcc >= 1.25 and not isSolvingGen and not solveBusy then
+            solveAcc = 0
+            task.spawn(function()
+                pcall(checkAndSolveGenUI)
+            end)
+        end
+    end
+
+    if hum then
+        if states.enableJump then
+            hum.UseJumpPower = true
+            hum.JumpPower = jumpPowerValue
+        end
+        if states.enableWalkSpeed and not states.botEnabled and not states.killerBotEnabled then
+            hum.WalkSpeed = walkSpeedValue
+        end
+    end
+    if hrp and hum and hum.MoveDirection.Magnitude > 0 then
+        if states.tpSpeedEnabled then
+            hrp.CFrame = hrp.CFrame + hum.MoveDirection * (tpSpeedValue * dt)
+        end
+        if states.shiftTpEnabled and (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)) then
+            hrp.CFrame = hrp.CFrame + hum.MoveDirection * (shiftTpSpeedValue * dt)
+        end
+    end
+
+    if states.espEnabled then
+        espAcc += dt
+        if espAcc >= 0.65 then
+            espAcc = 0
+            local alive = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LP then
+                    local char = p.Character
+                    if char and char.Parent then
+                        alive[p] = true
+                        local role = getPlayerRoleFolder(p)
+                        local isKill = role == "Killers"
+                        local hl = highlights[p]
+                        if not hl or hl.Parent ~= CoreGui or hl.Adornee ~= char then
+                            if hl then pcall(function() hl:Destroy() end) end
+                            hl = Instance.new("Highlight")
+                            hl.Name = "ControlPlayerESP"
+                            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                            hl.FillTransparency = 0.78
+                            hl.OutlineTransparency = 0
+                            hl.Parent = CoreGui
+                            hl.Adornee = char
+                            highlights[p] = hl
+                        end
+                        local c = isKill and Color3.fromRGB(255, 55, 55) or Color3.fromRGB(255, 255, 255)
+                        hl.FillColor = c
+                        hl.OutlineColor = c
+                    end
+                end
+            end
+            for p, hl in pairs(highlights) do
+                if not alive[p] then
+                    if hl then pcall(function() hl:Destroy() end) end
+                    highlights[p] = nil
+                end
+            end
+        end
+    elseif next(highlights) then
+        for p, hl in pairs(highlights) do
+            if hl then pcall(function() hl:Destroy() end) end
+            highlights[p] = nil
+        end
+    end
+
+    if states.hpEspEnabled then
+        hpEspAcc += dt
+        if hpEspAcc >= 0.5 then
+            hpEspAcc = 0
+        local alive = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and p.Character then
+                local char = p.Character
+                local head = char:FindFirstChild("Head")
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if head and hum then
+                    alive[p] = true
+                    local bb = hpBillboards[p]
+                    if not bb or bb.Parent ~= head then
+                        if bb then pcall(function() bb:Destroy() end) end
+                        bb = Instance.new("BillboardGui")
+                        bb.Name = "HP_ESP"
+                        bb.AlwaysOnTop = true
+                        bb.Size = UDim2.new(0, 100, 0, 20)
+                        bb.StudsOffset = Vector3.new(0, 2.5, 0)
+                        bb.SizeOffset = Vector2.new(0, 0)
+                        
+                        local lbl = Instance.new("TextLabel")
+                        lbl.Name = "HPLabel"
+                        lbl.Size = UDim2.new(1, 0, 1, 0)
+                        lbl.BackgroundTransparency = 1
+                        lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+                        lbl.Font = Enum.Font.Code
+                        lbl.TextSize = 13
+                        lbl.TextStrokeTransparency = 0.5
+                        lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                        lbl.Parent = bb
+                        
+                        bb.Parent = head
+                        hpBillboards[p] = bb
+                    end
+                    local lbl = bb:FindFirstChild("HPLabel")
+                    if lbl then
+                        lbl.Text = "HP: " .. math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth)
+                    end
+                end
+            end
+        end
+        for p, bb in pairs(hpBillboards) do
+            if not alive[p] then
+                if bb then pcall(function() bb:Destroy() end) end
+                hpBillboards[p] = nil
+            end
+        end
+        end
+    else
+        hpEspAcc = 0
+    end
+    if not states.hpEspEnabled and next(hpBillboards) then
+        for p, bb in pairs(hpBillboards) do
+            if bb then pcall(function() bb:Destroy() end) end
+            hpBillboards[p] = nil
+        end
+    end
+
+    if states.genEsp then
+        genEspAcc += dt
+        if genEspAcc >= 0.6 then
+            genEspAcc = 0
+            local generators = getIngameGenerators()
+            local activeGenerators = {}
+            local createBudget = 2
+
+            for _, gen in ipairs(generators) do
+                if gen and gen.Parent then
+                    activeGenerators[gen] = true
+                    local hl = genHighlights[gen]
+
+                    if not hl or hl.Parent ~= CoreGui or hl.Adornee ~= gen then
+                        if createBudget > 0 then
+                            if hl then pcall(function() hl:Destroy() end) end
+                            hl = Instance.new("Highlight")
+                            hl.Name = "ControlGeneratorESP"
+                            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                            hl.FillColor = Color3.fromRGB(255, 255, 255)
+                            hl.FillTransparency = 0.72
+                            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                            hl.OutlineTransparency = 0.05
+                            hl.Adornee = gen
+                            hl.Parent = CoreGui
+                            genHighlights[gen] = hl
+                            createBudget -= 1
+                        end
+                    end
+                end
+            end
+
+            for gen, hl in pairs(genHighlights) do
+                if not activeGenerators[gen] or not gen or not gen.Parent then
+                    if hl then pcall(function() hl:Destroy() end) end
+                    genHighlights[gen] = nil
+                end
+            end
+        end
+    elseif next(genHighlights) then
+        for g, hl in pairs(genHighlights) do
+            if hl and hl.Parent == CoreGui then
+                pcall(function() hl:Destroy() end)
+            end
+            genHighlights[g] = nil
+        end
+    end
+
+    if states.itemEsp then
+        itemEspAcc += dt
+        if itemEspAcc >= 1.0 then
+            itemEspAcc = 0
+            local activeItems = getIngameItems()
+            local activeSet = {}
+
+            for _, item in ipairs(activeItems) do
+                activeSet[item] = true
+                local hl = itemHighlights[item]
+                if not hl or hl.Parent ~= CoreGui then
+                    if hl then pcall(function() hl:Destroy() end) end
+                    hl = Instance.new("Highlight")
+                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    hl.FillColor = Color3.fromRGB(170, 170, 170)
+                    hl.FillTransparency = 0.45
+                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    hl.OutlineTransparency = 0
+                    hl.Parent = CoreGui
+                    itemHighlights[item] = hl
+                end
+                hl.Adornee = item
+            end
+
+            for item, hl in pairs(itemHighlights) do
+                if not activeSet[item] then
+                    if hl then pcall(function() hl:Destroy() end) end
+                    itemHighlights[item] = nil
+                end
+            end
+        end
+    elseif next(itemHighlights) then
+        for it, hl in pairs(itemHighlights) do
+            if hl then pcall(function() hl:Destroy() end) end
+            itemHighlights[it] = nil
+        end
+    end
+end))
+
+local function buildUI()
+local THEME = {
+    BG = Color3.fromRGB(8, 8, 8),
+    PANEL = Color3.fromRGB(14, 14, 14),
+    SIDE = Color3.fromRGB(11, 11, 11),
+    CARD = Color3.fromRGB(18, 18, 18),
+    HOVER = Color3.fromRGB(26, 26, 26),
+    BORDER = Color3.fromRGB(48, 48, 48),
+    BORDER2 = Color3.fromRGB(36, 36, 36),
+    TEXT = Color3.fromRGB(230, 230, 230),
+    DIM = Color3.fromRGB(140, 140, 140),
+    MUTED = Color3.fromRGB(90, 90, 90),
+    ACCENT = Color3.fromRGB(200, 200, 200),
+    ON = Color3.fromRGB(210, 210, 210),
+    OFF = Color3.fromRGB(32, 32, 32),
+    WHITE = Color3.fromRGB(255, 255, 255)
+}
+
+local function corner(obj, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 4)
+    c.Parent = obj
+    return c
+end
+
+pcall(function()
+    for _, root in ipairs({CoreGui, LP:FindFirstChildOfClass("PlayerGui")}) do
+        if root then
+            for _, obj in ipairs(root:GetChildren()) do
+                if obj:IsA("ScreenGui") and (obj.Name == "SStwendRT_Forsaken" or obj.Name == "ForsakenControl") then
+                    obj:Destroy()
+                end
+            end
+        end
+    end
+end)
+
+gui = Instance.new("ScreenGui")
+gui.Name = "ForsakenControl"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() gui.Parent = CoreGui end)
+if not gui.Parent then pcall(function() gui.Parent = LP:WaitForChild("PlayerGui", 5) end) end
+_G.__ForsakenHubGui = gui
+
+local W, H = 800, 520
+main = Instance.new("Frame")
+main.Size = UDim2.new(0, W, 0, H)
+main.Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2)
+main.BackgroundColor3 = THEME.BG
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+corner(main, 6)
+
+local resizeBtn = Instance.new("TextButton")
+resizeBtn.Size = UDim2.new(0, 16, 0, 16)
+resizeBtn.Position = UDim2.new(1, -16, 1, -16)
+resizeBtn.BackgroundTransparency = 1
+resizeBtn.Text = "◢"
+resizeBtn.TextColor3 = THEME.MUTED
+resizeBtn.TextSize = 12
+resizeBtn.AutoButtonColor = false
+resizeBtn.Parent = main
+
+local resizing = false
+local resizeStartPos
+local resizeStartSize
+
+bind(resizeBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        resizing = true
+        resizeStartPos = input.Position
+        resizeStartSize = main.AbsoluteSize
+    end
+end))
+
+bind(UserInputService.InputChanged:Connect(function(input)
+    if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - resizeStartPos
+        local newW = math.clamp(resizeStartSize.X + delta.X, 620, 1100)
+        local newH = math.clamp(resizeStartSize.Y + delta.Y, 400, 760)
+        main.Size = UDim2.new(0, newW, 0, newH)
+    end
+end))
+
+bind(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        resizing = false
+    end
+end))
+
+bind(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.LeftAlt or input.KeyCode == Enum.KeyCode.RightAlt then
+        menuVisible = not menuVisible
+        main.Visible = menuVisible
+    end
+end))
+
+local top = Instance.new("Frame")
+top.Size = UDim2.new(1, 0, 0, 40)
+top.BackgroundColor3 = THEME.PANEL
+top.BorderSizePixel = 0
+top.Parent = main
+
+local brand = Instance.new("TextLabel")
+brand.Size = UDim2.new(0, 190, 1, 0)
+brand.Position = UDim2.new(0, 14, 0, 0)
+brand.BackgroundTransparency = 1
+brand.Text = "CONTROL HUB"
+brand.TextColor3 = THEME.TEXT
+brand.Font = FONT_B
+brand.TextSize = 13
+brand.TextXAlignment = Enum.TextXAlignment.Left
+brand.Parent = top
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(0, 90, 1, 0)
+status.Position = UDim2.new(1, -138, 0, 0)
+status.BackgroundTransparency = 1
+status.Text = "● ONLINE"
+status.TextColor3 = THEME.DIM
+status.Font = FONT_B
+status.TextSize = 9
+status.TextXAlignment = Enum.TextXAlignment.Right
+status.Parent = top
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 36, 0, 28)
+closeBtn.Position = UDim2.new(1, -44, 0.5, -14)
+closeBtn.BackgroundColor3 = THEME.CARD
+closeBtn.BorderSizePixel = 0
+closeBtn.Text = "×"
+closeBtn.TextColor3 = THEME.DIM
+closeBtn.Font = FONT_B
+closeBtn.TextSize = 16
+closeBtn.AutoButtonColor = false
+closeBtn.Parent = top
+corner(closeBtn, 4)
+
+bind(closeBtn.MouseButton1Click:Connect(function()
+    scriptAlive = false
+    main.Visible = false
+    if gui then gui:Destroy() end
+    for _, connection in ipairs(connections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(connections)
+end))
+
+local nav = Instance.new("ScrollingFrame")
+nav.Size = UDim2.new(1, -16, 0, 34)
+nav.Position = UDim2.new(0, 8, 0, 44)
+nav.BackgroundColor3 = THEME.SIDE
+nav.BorderSizePixel = 0
+nav.ScrollBarThickness = 2
+nav.ScrollBarImageColor3 = THEME.BORDER
+nav.ScrollingDirection = Enum.ScrollingDirection.X
+nav.CanvasSize = UDim2.new(0, 0, 0, 0)
+nav.AutomaticCanvasSize = Enum.AutomaticSize.X
+nav.Parent = main
+corner(nav, 5)
+
+local navLayout = Instance.new("UIListLayout")
+navLayout.FillDirection = Enum.FillDirection.Horizontal
+navLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+navLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+navLayout.Padding = UDim.new(0, 4)
+navLayout.Parent = nav
+
+local navPad = Instance.new("UIPadding")
+navPad.PaddingLeft = UDim.new(0, 5)
+navPad.PaddingRight = UDim.new(0, 5)
+navPad.Parent = nav
+
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, -16, 1, -88)
+content.Position = UDim2.new(0, 8, 0, 84)
+content.BackgroundColor3 = THEME.PANEL
+content.BorderSizePixel = 0
+content.Parent = main
+corner(content, 5)
+
+tabs = {}
+local tabBtns = {}
+local tabNames = {"Main", "Movement", "Generators", "Visuals", "Items", "Teleport", "Utilities", "Configs"}
+local selectedTab
+local playerListRefresh
+
+local function createTab(name)
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, 0, 1, 0)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 3
+    scroll.ScrollBarImageColor3 = THEME.BORDER
+    scroll.Visible = false
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = content
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 10)
+    pad.PaddingRight = UDim.new(0, 10)
+    pad.PaddingTop = UDim.new(0, 8)
+    pad.PaddingBottom = UDim.new(0, 10)
+    pad.Parent = scroll
+
+    local list = Instance.new("UIListLayout")
+    list.Padding = UDim.new(0, 5)
+    list.SortOrder = Enum.SortOrder.LayoutOrder
+    list.Parent = scroll
+
+    tabs[name] = scroll
+    return scroll
+end
+
+local function selectTab(name)
+    selectedTab = name
+    for n, frame in pairs(tabs) do
+        frame.Visible = n == name
+    end
+    for _, button in ipairs(tabBtns) do
+        local active = button:GetAttribute("Tab") == name
+        button.BackgroundColor3 = active and THEME.CARD or THEME.SIDE
+        button.TextColor3 = active and THEME.TEXT or THEME.DIM
+    end
+    if name == "Teleport" and playerListRefresh then
+        playerListRefresh(true)
+    end
+end
+
+for _, name in ipairs(tabNames) do
+    createTab(name)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(0, math.max(78, #name * 8 + 30), 0, 26)
+    button.BackgroundColor3 = THEME.SIDE
+    button.BorderSizePixel = 0
+    button.Text = name
+    button.TextColor3 = THEME.DIM
+    button.Font = FONT_B
+    button.TextSize = 10
+    button.AutoButtonColor = false
+    button:SetAttribute("Tab", name)
+    button.Parent = nav
+    corner(button, 4)
+    bind(button.MouseEnter:Connect(function()
+        if button:GetAttribute("Tab") ~= selectedTab then
+            button.BackgroundColor3 = THEME.HOVER
+        end
+    end))
+    bind(button.MouseLeave:Connect(function()
+        if button:GetAttribute("Tab") ~= selectedTab then
+            button.BackgroundColor3 = THEME.SIDE
+        end
+    end))
+    bind(button.MouseButton1Click:Connect(function()
+        selectTab(name)
+    end))
+    table.insert(tabBtns, button)
+end
+
+local function makeSection(parent, title)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 25)
+    row.BackgroundTransparency = 1
+    row.BorderSizePixel = 0
+    row.Parent = parent
+
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(0, 3, 0, 14)
+    line.Position = UDim2.new(0, 1, 0.5, -7)
+    line.BackgroundColor3 = THEME.ACCENT
+    line.BorderSizePixel = 0
+    line.Parent = row
+    corner(line, 2)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -14, 1, 0)
+    label.Position = UDim2.new(0, 11, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = title
+    label.TextColor3 = THEME.DIM
+    label.Font = FONT_B
+    label.TextSize = 10
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+end
+
+local function makeToggle(parent, key, labelText, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = THEME.CARD
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    corner(row, 4)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -68, 1, 0)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = THEME.TEXT
+    label.Font = FONT
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(0, 46, 0, 20)
+    button.Position = UDim2.new(1, -54, 0.5, -10)
+    button.BackgroundColor3 = states[key] and THEME.ON or THEME.OFF
+    button.BorderSizePixel = 0
+    button.Text = states[key] and "ON" or "OFF"
+    button.TextColor3 = states[key] and Color3.fromRGB(10, 10, 10) or THEME.DIM
+    button.Font = FONT_B
+    button.TextSize = 9
+    button.AutoButtonColor = false
+    button.Parent = row
+    corner(button, 10)
+
+    local function refresh()
+        local enabled = states[key] == true
+        button.Text = enabled and "ON" or "OFF"
+        button.BackgroundColor3 = enabled and THEME.ON or THEME.OFF
+        button.TextColor3 = enabled and Color3.fromRGB(10, 10, 10) or THEME.DIM
+    end
+
+    bind(button.MouseEnter:Connect(function()
+        button.BackgroundColor3 = states[key] and THEME.WHITE or THEME.HOVER
+    end))
+    bind(button.MouseLeave:Connect(refresh))
+    bind(button.MouseButton1Click:Connect(function()
+        states[key] = not states[key]
+        refresh()
+        if callback then pcall(callback, states[key]) end
+    end))
+    return refresh
+end
+
+local function makeSlider(parent, labelText, min, max, default, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 42)
+    row.BackgroundColor3 = THEME.CARD
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    corner(row, 4)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.6, 0, 0, 18)
+    label.Position = UDim2.new(0, 10, 0, 2)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = THEME.TEXT
+    label.Font = FONT
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local valueLabel = Instance.new("TextLabel")
+    valueLabel.Size = UDim2.new(0.3, -10, 0, 18)
+    valueLabel.Position = UDim2.new(0.7, 0, 0, 2)
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.Text = tostring(default)
+    valueLabel.TextColor3 = THEME.DIM
+    valueLabel.Font = FONT_B
+    valueLabel.TextSize = 11
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+    valueLabel.Parent = row
+
+    local sliderBg = Instance.new("Frame")
+    sliderBg.Size = UDim2.new(1, -20, 0, 8)
+    sliderBg.Position = UDim2.new(0, 10, 0, 26)
+    sliderBg.BackgroundColor3 = THEME.OFF
+    sliderBg.BorderSizePixel = 0
+    sliderBg.Parent = row
+    corner(sliderBg, 4)
+
+    local ratio = math.clamp((default - min) / math.max(1, max - min), 0, 1)
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(ratio, 0, 1, 0)
+    fill.BackgroundColor3 = THEME.ON
+    fill.BorderSizePixel = 0
+    fill.Parent = sliderBg
+    corner(fill, 4)
+
+    local dragging = false
+    local function update(input)
+        if sliderBg.AbsoluteSize.X <= 0 then return end
+        local x = math.clamp(input.Position.X - sliderBg.AbsolutePosition.X, 0, sliderBg.AbsoluteSize.X)
+        local r = x / sliderBg.AbsoluteSize.X
+        local value = math.floor(min + (max - min) * r + 0.5)
+        fill.Size = UDim2.new(r, 0, 1, 0)
+        valueLabel.Text = tostring(value)
+        if callback then pcall(callback, value) end
+    end
+
+    bind(sliderBg.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            update(input)
+        end
+    end))
+    bind(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            update(input)
+        end
+    end))
+    bind(UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end))
+end
+
+local function makeButton(parent, labelText, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 32)
+    row.BackgroundColor3 = THEME.CARD
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    corner(row, 4)
+
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, 0, 1, 0)
+    button.BackgroundTransparency = 1
+    button.Text = labelText
+    button.TextColor3 = THEME.TEXT
+    button.Font = FONT_B
+    button.TextSize = 11
+    button.AutoButtonColor = false
+    button.Parent = row
+
+    bind(button.MouseEnter:Connect(function()
+        button.TextColor3 = THEME.WHITE
+        row.BackgroundColor3 = THEME.HOVER
+    end))
+    bind(button.MouseLeave:Connect(function()
+        button.TextColor3 = THEME.TEXT
+        row.BackgroundColor3 = THEME.CARD
+    end))
+    bind(button.MouseButton1Click:Connect(function()
+        if callback then pcall(callback) end
+    end))
+end
+
+makeSection(tabs.Main, "TELEPORT / CORE")
+makeToggle(tabs.Main, "backTeleport", "Guest 666 Sit Back Teleport", function() end)
+makeToggle(tabs.Main, "godMode", "God Mode (Anti-Damage)", function() end)
+makeToggle(tabs.Main, "antiFlower", "Remove Flowers / Dusikar", function() end)
+makeToggle(tabs.Main, "killerDoors", "Disable Killer Doors (Noclip Doors)", function(v) updateKillerDoors() end)
+makeToggle(tabs.Main, "ctrlClickTp", "Ctrl + Left Click Teleport", function() end)
+makeToggle(tabs.Main, "safeSpectatorTp", "Safe Spectator Mode Teleport", function() end)
+makeButton(tabs.Main, "Teleport To Safe Spot (High Up)", function()
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then safeTeleport(hrp.CFrame + Vector3.new(0, 150, 0)) end
+end)
+makeButton(tabs.Main, "Teleport To Nearest Generator", function() teleportToGenerator() end)
+makeButton(tabs.Main, "Auto Repair Nearest Generator", function() autoFixGenerator(nil) end)
+makeSection(tabs.Main, "LOBBY SAFE")
+makeSlider(tabs.Main, "Lobby Safe Delay", 1, 5, math.floor(lobbySafeDelay * 10 + 0.5), function(v) lobbySafeDelay = math.clamp(v / 10, 0.1, 0.5) end)
+makeButton(tabs.Main, "Lobby Safe Teleport", function() lobbySafeTeleport(lobbySafeDelay) end)
+makeButton(tabs.Main, "Lobby Safe Teleport 0.1s", function() lobbySafeTeleport(0.1) end)
+makeButton(tabs.Main, "Lobby Safe Teleport 0.5s", function() lobbySafeTeleport(0.5) end)
+
+makeSection(tabs.Movement, "MOVEMENT")
+makeToggle(tabs.Movement, "enableWalkSpeed", "Enable WalkSpeed", function() end)
+makeSlider(tabs.Movement, "WalkSpeed Value", 16, 200, walkSpeedValue, function(v) walkSpeedValue = v end)
+makeToggle(tabs.Movement, "tpSpeedEnabled", "TP Speed Loop", function() end)
+makeSlider(tabs.Movement, "TP Speed Value", 5, 100, tpSpeedValue, function(v) tpSpeedValue = v end)
+makeToggle(tabs.Movement, "shiftTpEnabled", "Shift TP Boost", function() end)
+makeSlider(tabs.Movement, "Shift TP Speed Value", 10, 150, shiftTpSpeedValue, function(v) shiftTpSpeedValue = v end)
+makeToggle(tabs.Movement, "enableJump", "Enable JumpPower", function() end)
+makeSlider(tabs.Movement, "Jump Power Value", 50, 300, jumpPowerValue, function(v) jumpPowerValue = v end)
+makeToggle(tabs.Movement, "flyEnabled", "Fly Mode", function() end)
+makeSlider(tabs.Movement, "Fly Speed Value", 10, 300, flySpeedValue, function(v) flySpeedValue = v end)
+makeToggle(tabs.Movement, "noclip", "Noclip Character", function() end)
+makeToggle(tabs.Movement, "noBarriers", "Disable Barriers", function(v) updateBarriers() end)
+
+makeSection(tabs.Generators, "GENERATORS")
+makeToggle(tabs.Generators, "autoSolveGen", "Auto Solve Generator Minigame", function() end)
+makeToggle(tabs.Generators, "genEsp", "Generator ESP", function() end)
+makeButton(tabs.Generators, "Teleport To Nearest Generator", function() teleportToGenerator() end)
+makeButton(tabs.Generators, "Auto Repair Nearest Generator", function() autoFixGenerator(nil) end)
+
+makeSection(tabs.Visuals, "VISUALS")
+makeToggle(tabs.Visuals, "espEnabled", "Player ESP", function() end)
+makeToggle(tabs.Visuals, "hpEspEnabled", "Player HP Text (Thin Overhead)", function() end)
+makeToggle(tabs.Visuals, "fullBright", "FullBright / Remove Fog & Atmosphere", function() end)
+makeToggle(tabs.Visuals, "radarEnabled", "Player Radar", function(v)
+    if radarGui then radarGui.Enabled = v end
+end)
+
+makeSection(tabs.Items, "ITEMS")
+makeToggle(tabs.Items, "itemEsp", "Item ESP (Tools Only)", function(v)
+    if v then initItemCache() end
+end)
+
+makeSection(tabs.Teleport, "PLAYER TELEPORT")
+local teleportInfo = Instance.new("TextLabel")
+teleportInfo.Size = UDim2.new(1, 0, 0, 24)
+teleportInfo.BackgroundTransparency = 1
+teleportInfo.Text = "SELECT A PLAYER TO TELEPORT"
+teleportInfo.TextColor3 = THEME.MUTED
+teleportInfo.Font = FONT_B
+teleportInfo.TextSize = 9
+teleportInfo.TextXAlignment = Enum.TextXAlignment.Left
+teleportInfo.Parent = tabs.Teleport
+
+local playerContainer = Instance.new("Frame")
+playerContainer.Size = UDim2.new(1, 0, 0, 0)
+playerContainer.AutomaticSize = Enum.AutomaticSize.Y
+playerContainer.BackgroundTransparency = 1
+playerContainer.Parent = tabs.Teleport
+local playerLayout = Instance.new("UIListLayout")
+playerLayout.Padding = UDim.new(0, 4)
+playerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+playerLayout.Parent = playerContainer
+
+local playerSignature = ""
+local playerRefreshBusy = false
+
+local function getRoleData(player)
+    local role = getPlayerRoleFolder(player)
+    if role == "Killers" then
+        return "KILLER", Color3.fromRGB(220, 90, 90)
+    elseif role == "Spectating" then
+        return "SPECTATOR", Color3.fromRGB(150, 150, 150)
+    end
+    return "SURVIVOR", Color3.fromRGB(190, 190, 190)
+end
+
+local function playerKey(player)
+    local role = getPlayerRoleFolder(player)
+    local character = player.Character
+    local alive = character and character.Parent and "1" or "0"
+    return tostring(player.UserId) .. ":" .. role .. ":" .. alive
+end
+
+local function createRoleHeader(textValue, color, count)
+    local header = Instance.new("Frame")
+    header.Size = UDim2.new(1, 0, 0, 25)
+    header.BackgroundColor3 = THEME.SIDE
+    header.BorderSizePixel = 0
+    header.Parent = playerContainer
+    corner(header, 4)
+
+    local marker = Instance.new("Frame")
+    marker.Size = UDim2.new(0, 3, 0, 13)
+    marker.Position = UDim2.new(0, 7, 0.5, -6)
+    marker.BackgroundColor3 = color
+    marker.BorderSizePixel = 0
+    marker.Parent = header
+    corner(marker, 2)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -55, 1, 0)
+    label.Position = UDim2.new(0, 17, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = textValue
+    label.TextColor3 = color
+    label.Font = FONT_B
+    label.TextSize = 9
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = header
+
+    local countLabel = Instance.new("TextLabel")
+    countLabel.Size = UDim2.new(0, 35, 1, 0)
+    countLabel.Position = UDim2.new(1, -40, 0, 0)
+    countLabel.BackgroundTransparency = 1
+    countLabel.Text = tostring(count)
+    countLabel.TextColor3 = THEME.MUTED
+    countLabel.Font = FONT_B
+    countLabel.TextSize = 9
+    countLabel.TextXAlignment = Enum.TextXAlignment.Right
+    countLabel.Parent = header
+end
+
+local function createPlayerRow(player, roleText, roleColor)
+    local row = Instance.new("TextButton")
+    row.Size = UDim2.new(1, 0, 0, 46)
+    row.BackgroundColor3 = THEME.CARD
+    row.BorderSizePixel = 0
+    row.Text = ""
+    row.AutoButtonColor = false
+    row.Parent = playerContainer
+    corner(row, 4)
+
+    local avatar = Instance.new("ImageLabel")
+    avatar.Size = UDim2.new(0, 32, 0, 32)
+    avatar.Position = UDim2.new(0, 7, 0.5, -16)
+    avatar.BackgroundColor3 = THEME.OFF
+    avatar.BorderSizePixel = 0
+    avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(player.UserId) .. "&w=48&h=48"
+    avatar.Parent = row
+    corner(avatar, 16)
+
+    local display = Instance.new("TextLabel")
+    display.Size = UDim2.new(1, -150, 0, 19)
+    display.Position = UDim2.new(0, 48, 0, 5)
+    display.BackgroundTransparency = 1
+    display.Text = player.DisplayName
+    display.TextColor3 = THEME.TEXT
+    display.Font = FONT_B
+    display.TextSize = 11
+    display.TextXAlignment = Enum.TextXAlignment.Left
+    display.TextTruncate = Enum.TextTruncate.AtEnd
+    display.Parent = row
+
+    local username = Instance.new("TextLabel")
+    username.Size = UDim2.new(1, -150, 0, 15)
+    username.Position = UDim2.new(0, 48, 0, 24)
+    username.BackgroundTransparency = 1
+    username.Text = "@" .. player.Name
+    username.TextColor3 = THEME.MUTED
+    username.Font = FONT
+    username.TextSize = 9
+    username.TextXAlignment = Enum.TextXAlignment.Left
+    username.TextTruncate = Enum.TextTruncate.AtEnd
+    username.Parent = row
+
+    local roleLabel = Instance.new("TextLabel")
+    roleLabel.Size = UDim2.new(0, 82, 0, 18)
+    roleLabel.Position = UDim2.new(1, -90, 0.5, -9)
+    roleLabel.BackgroundTransparency = 1
+    roleLabel.Text = roleText
+    roleLabel.TextColor3 = roleColor
+    roleLabel.Font = FONT_B
+    roleLabel.TextSize = 8
+    roleLabel.TextXAlignment = Enum.TextXAlignment.Right
+    roleLabel.Parent = row
+
+    bind(row.MouseEnter:Connect(function() row.BackgroundColor3 = THEME.HOVER end))
+    bind(row.MouseLeave:Connect(function() row.BackgroundColor3 = THEME.CARD end))
+    bind(row.MouseButton1Click:Connect(function()
+        local char = player.Character
+        local target = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
+        if target then
+            safeTeleport(target.CFrame + Vector3.new(0, 3, 0))
+        end
+    end))
+end
+
+playerListRefresh = function(force)
+    if playerRefreshBusy then return end
+    if not force and selectedTab ~= "Teleport" then return end
+    playerRefreshBusy = true
+    local groups = {Killers = {}, Survivors = {}, Spectating = {}}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP then
+            local role = getPlayerRoleFolder(player)
+            if role ~= "Killers" and role ~= "Spectating" then role = "Survivors" end
+            table.insert(groups[role], player)
+        end
+    end
+    table.sort(groups.Killers, function(a, b) return a.DisplayName:lower() < b.DisplayName:lower() end)
+    table.sort(groups.Survivors, function(a, b) return a.DisplayName:lower() < b.DisplayName:lower() end)
+    table.sort(groups.Spectating, function(a, b) return a.DisplayName:lower() < b.DisplayName:lower() end)
+
+    local signatureParts = {}
+    for _, groupName in ipairs({"Killers", "Survivors", "Spectating"}) do
+        for _, player in ipairs(groups[groupName]) do
+            table.insert(signatureParts, playerKey(player))
+        end
+        table.insert(signatureParts, "|" .. groupName)
+    end
+    local signature = table.concat(signatureParts, ";")
+    if force or signature ~= playerSignature then
+        playerSignature = signature
+        for _, child in ipairs(playerContainer:GetChildren()) do
+            if not child:IsA("UIListLayout") then
+                child:Destroy()
+            end
+        end
+        local roleNames = {
+            {"Killers", "KILLERS", Color3.fromRGB(220, 90, 90)},
+            {"Survivors", "SURVIVORS", Color3.fromRGB(190, 190, 190)},
+            {"Spectating", "SPECTATING", Color3.fromRGB(150, 150, 150)}
+        }
+        for _, info in ipairs(roleNames) do
+            createRoleHeader(info[2], info[3], #groups[info[1]])
+            for _, player in ipairs(groups[info[1]]) do
+                local roleText, roleColor = getRoleData(player)
+                createPlayerRow(player, roleText, roleColor)
+            end
+        end
+        teleportInfo.Text = "PLAYERS: " .. tostring(#Players:GetPlayers() - 1) .. "  //  CLICK TO TELEPORT"
+    end
+    playerRefreshBusy = false
+end
+
+bind(Players.PlayerAdded:Connect(function()
+    task.defer(function() playerListRefresh(true) end)
+end))
+bind(Players.PlayerRemoving:Connect(function()
+    task.defer(function() playerListRefresh(true) end)
+end))
+
+task.spawn(function()
+    while scriptAlive and _G.__ForsakenHubGeneration == hubGeneration and gui and gui.Parent do
+        if selectedTab == "Teleport" then
+            pcall(playerListRefresh, false)
+        end
+        task.wait(0.75)
+    end
+end)
+
+makeSection(tabs.Utilities, "UTILITY")
+local utilityInfo = Instance.new("TextLabel")
+utilityInfo.Size = UDim2.new(1, 0, 0, 38)
+utilityInfo.BackgroundColor3 = THEME.CARD
+utilityInfo.TextColor3 = THEME.DIM
+utilityInfo.Font = FONT
+utilityInfo.TextSize = 10
+utilityInfo.TextWrapped = true
+utilityInfo.Text = "CONTROL HUB // LOCAL UTILITY PANEL"
+utilityInfo.Parent = tabs.Utilities
+corner(utilityInfo, 4)
+
+makeButton(tabs.Utilities, "Rejoin Current Server", function()
+    local TeleportService = game:GetService("TeleportService")
+    pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP) end)
+end)
+makeButton(tabs.Utilities, "Reset Character", function()
+    local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+    if hum then pcall(function() hum.Health = 0 end) end
+end)
+makeButton(tabs.Utilities, "Refresh Player List", function()
+    if playerListRefresh then playerListRefresh(true) end
+end)
+makeButton(tabs.Utilities, "Copy Job ID", function()
+    pcall(function() if setclipboard then setclipboard(tostring(game.JobId)) end end)
+end)
+makeButton(tabs.Utilities, "Copy Place ID", function()
+    pcall(function() if setclipboard then setclipboard(tostring(game.PlaceId)) end end)
+end)
+makeButton(tabs.Utilities, "Clear Lobby Position History", function()
+    lobbyHistory = {}
+end)
+
+makeSection(tabs.Configs, "CONFIG MANAGER")
+configStatus = Instance.new("TextLabel")
+configStatus.Size = UDim2.new(1, 0, 0, 24)
+configStatus.BackgroundTransparency = 1
+configStatus.Text = "SLOT 1 // EMPTY"
+configStatus.TextColor3 = THEME.MUTED
+configStatus.Font = FONT_B
+configStatus.TextSize = 9
+configStatus.TextXAlignment = Enum.TextXAlignment.Left
+configStatus.Parent = tabs.Configs
+
+local cfgInput = Instance.new("TextBox")
+cfgInput.Size = UDim2.new(1, 0, 0, 72)
+cfgInput.BackgroundColor3 = THEME.CARD
+cfgInput.TextColor3 = THEME.TEXT
+cfgInput.PlaceholderText = "JSON configuration..."
+cfgInput.PlaceholderColor3 = THEME.MUTED
+cfgInput.Font = FONT
+cfgInput.TextSize = 9
+cfgInput.TextWrapped = true
+cfgInput.MultiLine = true
+cfgInput.ClearTextOnFocus = false
+cfgInput.TextXAlignment = Enum.TextXAlignment.Left
+cfgInput.TextYAlignment = Enum.TextYAlignment.Top
+cfgInput.Parent = tabs.Configs
+corner(cfgInput, 4)
+
+local function buildConfig()
+    return {version = 2, states = states, values = {tpSpeed = tpSpeedValue, shiftTpSpeed = shiftTpSpeedValue, walkSpeed = walkSpeedValue, jumpPower = jumpPowerValue, flySpeed = flySpeedValue, sprintSpeed = sprintSpeedValue, lobbySafeDelay = lobbySafeDelay}}
+end
+
+local function applyConfig(data)
+    if type(data) ~= "table" then return false end
+    local src = type(data.states) == "table" and data.states or data
+    for key, value in pairs(src) do
+        if states[key] ~= nil and type(value) == "boolean" then states[key] = value end
+    end
+    local v = type(data.values) == "table" and data.values or data
+    if type(v.tpSpeed) == "number" then tpSpeedValue = math.clamp(v.tpSpeed, 5, 100) end
+    if type(v.shiftTpSpeed) == "number" then shiftTpSpeedValue = math.clamp(v.shiftTpSpeed, 10, 150) end
+    if type(v.walkSpeed) == "number" then walkSpeedValue = math.clamp(v.walkSpeed, 16, 200) end
+    if type(v.jumpPower) == "number" then jumpPowerValue = math.clamp(v.jumpPower, 50, 300) end
+    if type(v.flySpeed) == "number" then flySpeedValue = math.clamp(v.flySpeed, 10, 300) end
+    if type(v.sprintSpeed) == "number" then sprintSpeedValue = math.clamp(v.sprintSpeed, 20, 100) end
+    if type(v.lobbySafeDelay) == "number" then lobbySafeDelay = math.clamp(v.lobbySafeDelay, 0.1, 0.5) end
+    pcall(updateKillerDoors)
+    pcall(updateBarriers)
+    return true
+end
+
+local function updateConfigStatus(text)
+    if configStatus then configStatus.Text = text end
+end
+
+for slot = 1, 3 do
+    makeButton(tabs.Configs, "Save Slot " .. slot, function()
+        configSlots[slot] = buildConfig()
+        local ok, encoded = pcall(function() return HttpService:JSONEncode(configSlots[slot]) end)
+        if ok then cfgInput.Text = encoded end
+        updateConfigStatus("SLOT " .. slot .. " // SAVED")
+    end)
+    makeButton(tabs.Configs, "Load Slot " .. slot, function()
+        if configSlots[slot] then
+            applyConfig(configSlots[slot])
+            updateConfigStatus("SLOT " .. slot .. " // LOADED")
+        else
+            updateConfigStatus("SLOT " .. slot .. " // EMPTY")
+        end
+    end)
+end
+
+makeButton(tabs.Configs, "Export Current Config", function()
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(buildConfig()) end)
+    if ok and encoded then
+        cfgInput.Text = encoded
+        pcall(function() if setclipboard then setclipboard(encoded) end end)
+        updateConfigStatus("CONFIG // EXPORTED")
+    end
+end)
+
+makeButton(tabs.Configs, "Import Config From Box", function()
+    local ok, decoded = pcall(function() return HttpService:JSONDecode(cfgInput.Text) end)
+    if ok and type(decoded) == "table" and applyConfig(decoded) then
+        updateConfigStatus("CONFIG // IMPORTED")
+    else
+        updateConfigStatus("CONFIG // INVALID JSON")
+    end
+end)
+
+makeButton(tabs.Configs, "Reset All Toggles", function()
+    for key in pairs(states) do states[key] = false end
+    pcall(updateKillerDoors)
+    pcall(updateBarriers)
+    if radarGui then radarGui.Enabled = false end
+    updateConfigStatus("CONFIG // RESET")
+end)
+
+selectTab("Main")
+end
+
+
+local function destroyRadar()
+    if radarGui then pcall(function() radarGui:Destroy() end) end
+    radarGui = nil
+    radarDots = {}
+end
+
+local function buildRadar()
+    destroyRadar()
+    local playerGui = LP:FindFirstChildOfClass("PlayerGui")
+    if not playerGui then return end
+    radarGui = Instance.new("ScreenGui")
+    radarGui.Name = "ForsakenRadar"
+    radarGui.ResetOnSpawn = false
+    radarGui.IgnoreGuiInset = true
+    radarGui.Enabled = states.radarEnabled
+    radarGui.Parent = playerGui
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.fromOffset(150, 150)
+    panel.Position = UDim2.new(1, -166, 0, 105)
+    panel.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
+    panel.BackgroundTransparency = 0.08
+    panel.BorderSizePixel = 0
+    panel.Parent = radarGui
+    local panelCorner = Instance.new("UICorner")
+    panelCorner.CornerRadius = UDim.new(0, 75)
+    panelCorner.Parent = panel
+    local ring = Instance.new("UIStroke")
+    ring.Color = Color3.fromRGB(48, 48, 48)
+    ring.Thickness = 1
+    ring.Transparency = 0.15
+    ring.Parent = panel
+    local center = Instance.new("Frame")
+    center.Size = UDim2.fromOffset(5, 5)
+    center.Position = UDim2.new(0.5, -2.5, 0.5, -2.5)
+    center.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
+    center.BorderSizePixel = 0
+    center.Parent = panel
+    local centerCorner = Instance.new("UICorner")
+    centerCorner.CornerRadius = UDim.new(0, 5)
+    centerCorner.Parent = center
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 18)
+    label.Position = UDim2.new(0, 0, 1, 4)
+    label.BackgroundTransparency = 1
+    label.Text = "RADAR // 180 STUDS"
+    label.TextColor3 = Color3.fromRGB(90, 90, 90)
+    label.Font = FONT_B
+    label.TextSize = 8
+    label.Parent = panel
+end
+
+local function updateRadar()
+    if not radarGui or not radarGui.Enabled then return end
+    local panel = radarGui:FindFirstChildOfClass("Frame")
+    if not panel then return end
+    local camera = workspace.CurrentCamera
+    local root = getRootPart()
+    if not camera or not root then return end
+    local used = {}
+    local maxDistance = 180
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP and player.Character then
+            local target = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("UpperTorso") or player.Character:FindFirstChild("Torso")
+            if target then
+                local offset = target.Position - root.Position
+                local dist = offset.Magnitude
+                if dist <= maxDistance then
+                    local localX = offset:Dot(camera.CFrame.RightVector) / maxDistance
+                    local localY = offset:Dot(camera.CFrame.LookVector) / maxDistance
+                    local x = math.clamp(0.5 + localX * 0.45, 0.06, 0.94)
+                    local y = math.clamp(0.5 - localY * 0.45, 0.06, 0.94)
+                    local dot = radarDots[player] or Instance.new("Frame")
+                    radarDots[player] = dot
+                    dot.Size = UDim2.fromOffset(7, 7)
+                    dot.AnchorPoint = Vector2.new(0.5, 0.5)
+                    dot.Position = UDim2.new(x, 0, y, 0)
+                    dot.BorderSizePixel = 0
+                    local role = getPlayerRoleFolder(player)
+                    dot.BackgroundColor3 = role == "Killers" and Color3.fromRGB(220, 90, 90) or role == "Spectating" and Color3.fromRGB(150, 150, 150) or Color3.fromRGB(230, 230, 230)
+                    dot.Parent = panel
+                    local dotCorner = dot:FindFirstChildOfClass("UICorner")
+                    if not dotCorner then
+                        dotCorner = Instance.new("UICorner")
+                        dotCorner.CornerRadius = UDim.new(0, 4)
+                        dotCorner.Parent = dot
+                    end
+                    used[player] = true
+                end
+            end
+        end
+    end
+    for player, dot in pairs(radarDots) do
+        if not used[player] then
+            pcall(function() dot:Destroy() end)
+            radarDots[player] = nil
+        end
+    end
+end
+
+buildRadar()
+local radarAcc = 0
+bind(RunService.Heartbeat:Connect(function(dt)
+    if not scriptAlive or _G.__ForsakenHubGeneration ~= hubGeneration then return end
+    radarAcc += dt
+    if radarAcc >= 0.15 then
+        radarAcc = 0
+        pcall(updateRadar)
+    end
+end))
+
+bind(Players.PlayerRemoving:Connect(function(player)
+    local dot = radarDots[player]
+    if dot then pcall(function() dot:Destroy() end) end
+    radarDots[player] = nil
+end))
+
+buildUI()
